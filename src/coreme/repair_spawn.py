@@ -214,7 +214,8 @@ def codex_prompt(
         [
             "Rules:",
             "- Edit source only; never edit releases/.",
-            "- Job code must never call an LLM or Codex.",
+            "- Do not add, enable, or reuse Job-owned runtime Codex / LLM for this repair.",
+            "- Day 7 repair is a post-fail coordinator, not the Job's runtime-AI path.",
             "- One focused fix; no drive-by refactors.",
             "- Read only the brief, fail.json, log tail, and files named in the traceback.",
             "- Do not load extra monorepo skills/docs unless the crash is still unclear.",

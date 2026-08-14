@@ -105,7 +105,8 @@ None.
 
 - Secret values in Job tree, git, `releases/`, structured evidence
 - Edit under `releases/`
-- LLM / Codex from Job code
+- Undocumented LLM / Codex from Job code; live Codex in `coreme test`
+- Using Day 7 repair / `--auto-repair` as this Job's runtime-AI path
 
 ## Author loop
 

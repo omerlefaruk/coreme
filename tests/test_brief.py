@@ -55,6 +55,8 @@ def test_brief_from_failed_run(tmp_path: Path) -> None:
     assert str((tmp_path / "demo").resolve()) in text or "demo" in text
     assert "Never" in text or "never" in text
     assert "releases/" in text
+    assert "Do **not** add, enable, or reuse Job-owned runtime Codex" in text
+    assert "never** call an LLM" not in text
     assert "Crash signature" in text
     assert "Done when" in text
 

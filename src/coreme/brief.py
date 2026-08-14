@@ -201,7 +201,10 @@ def assemble_brief(
     lines.append("")
     lines.append("1. Trust the **Crash signature** first; then `fail.json`, log, events.")
     lines.append("2. Edit the **source** Job only. Never write into `releases/`.")
-    lines.append("3. Job code must **never** call an LLM or Codex.")
+    lines.append(
+        "3. Do **not** add, enable, or reuse Job-owned runtime Codex / LLM. "
+        "Repair is a post-fail coordinator, not the Job's runtime-AI path."
+    )
     lines.append("4. One focused fix; do not refactor unrelated code.")
     lines.append(
         "5. Read only: this brief, fail.json, log tail, and source files named in the traceback."

@@ -141,6 +141,8 @@ def test_codex_argv_includes_authority_flags(monkeypatch: pytest.MonkeyPatch) ->
     prompt = codex_prompt(Path("b.md"), Path("src"), Path("run"), crash_signature="TimeoutError: x")
     assert "CRASH SIGNATURE" in prompt
     assert "TimeoutError" in prompt
+    assert "Do not add, enable, or reuse Job-owned runtime Codex" in prompt
+    assert "never call an LLM" not in prompt
 
 
 def test_run_auto_repair_off_no_repair_json(
@@ -355,7 +357,7 @@ def test_resolve_source_dev_job(tmp_path: Path) -> None:
     assert source.resolve() == job.resolve()
 
 
-def test_resolve_source_release_finds_nested_job(tmp_path: Path) -> None:
+def test_resolve_source_release_finds_examples_style(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
     src = write_job(
         repo / "mytool",

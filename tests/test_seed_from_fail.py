@@ -52,7 +52,7 @@ def _write_run(
 
 
 def test_stages_copy_and_command_includes_seed(tmp_path: Path) -> None:
-    job = tmp_path / "jobs" / "phased-demo"
+    job = tmp_path / "examples" / "phased-demo"
     job.mkdir(parents=True)
     (job / "JOB.toml").write_text('name = "phased-demo"\n', encoding="utf-8")
     run = _write_run(tmp_path, job_path=job)

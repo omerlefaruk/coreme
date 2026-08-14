@@ -11,6 +11,7 @@ from helpers import make_repo, write_job, write_job_manifest
 from coreme.cli import main
 from coreme.inputs import SecretError, resolve_secrets
 from coreme.manifest import ManifestError, load_manifest
+from coreme.proof import test_job as prove_job
 from coreme.runner import run_job
 from coreme.ship import ShipError, ship_job
 
@@ -215,6 +216,18 @@ def test_clean_release_with_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert record.release is True
     assert record.content_hash == content_hash
     assert record.secrets == ["REL_TOKEN"]
+
+
+def test_secret_echo_test_and_ship_without_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).resolve().parent.parent
+    example = root / "examples" / "secret-echo"
+    monkeypatch.delenv("DEMO_TOKEN", raising=False)
+    assert prove_job(example) == 0
+    repo = make_repo(tmp_path)
+    release, _ = ship_job(example, repo)
+    assert (release / "RELEASE.json").is_file()
 
 
 def test_cli_missing_secret_exit_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

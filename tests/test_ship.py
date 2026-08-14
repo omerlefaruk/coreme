@@ -427,7 +427,7 @@ def test_dangling_release_destination_link_refused(tmp_path: Path) -> None:
     releases = repo / "releases"
     releases.mkdir()
     _try_symlink(tmp_path / "missing", releases / "demo-0.1.0")
-    with pytest.raises(ShipError, match="already exists|escapes releases"):
+    with pytest.raises(ShipError, match="already exists"):
         ship_job(job, repo)
 
 

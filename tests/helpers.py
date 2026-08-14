@@ -1,4 +1,4 @@
-"""Shared fixtures for kernel tests."""
+"""Shared fixtures for kernel tests. Prefer examples/ for product e2e."""
 
 from __future__ import annotations
 
