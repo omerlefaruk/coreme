@@ -1,12 +1,15 @@
-"""CLI for local fleet agent (F1): enqueue, once, drain, list."""
+"""CLI for local fleet agent (F1) and hub drain (F2)."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from coreme_agent import __version__
+from coreme_agent.hub import HubClient, HubClientError
+from coreme_agent.hub_worker import drain_hub, process_one_hub
 from coreme_agent.store import (
     LocalQueue,
     QueueError,
@@ -19,9 +22,7 @@ from coreme_agent.worker import drain, process_one
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="coreme-agent",
-        description=(
-            "Local fleet agent: drain a SQLite queue and run coreme (F1 — no multi-machine hub)."
-        ),
+        description=("Fleet agent: drain a local SQLite queue (F1) or a hub (F2 --hub)."),
     )
     parser.add_argument(
         "--version",
@@ -112,6 +113,27 @@ def _add_run_flags(p: argparse.ArgumentParser) -> None:
         default=None,
         help="Agent-level wall timeout for one coreme invocation",
     )
+    p.add_argument(
+        "--hub",
+        default=os.environ.get("COREME_HUB_URL"),
+        help="Hub base URL (or COREME_HUB_URL). Local SQLite if omitted.",
+    )
+    p.add_argument(
+        "--machine-id",
+        default=os.environ.get("COREME_MACHINE_ID"),
+        help="Machine id for hub mode (or COREME_MACHINE_ID)",
+    )
+    p.add_argument(
+        "--machine-token",
+        default=os.environ.get("COREME_MACHINE_TOKEN"),
+        help="Machine bearer token (or COREME_MACHINE_TOKEN)",
+    )
+    p.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        help="Machine tag for hub claim match (repeat)",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -128,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_list(args)
         if args.command == "show":
             return _cmd_show(args)
-    except QueueError as exc:
+    except (QueueError, HubClientError) as exc:
         print(f"error={exc}", file=sys.stderr)
         return 2
     parser.error(f"unknown command {args.command!r}")
@@ -160,14 +182,32 @@ def _cmd_enqueue(args: argparse.Namespace) -> int:
     return 0
 
 
+def _hub_client(args: argparse.Namespace) -> HubClient | None:
+    if not args.hub:
+        return None
+    if not args.machine_id or not args.machine_token:
+        raise QueueError("hub mode needs --machine-id and --machine-token")
+    return HubClient(args.hub, args.machine_token, args.machine_id)
+
+
 def _cmd_once(args: argparse.Namespace) -> int:
-    with _open_queue(args) as queue:
-        finished = process_one(
-            queue,
+    hub = _hub_client(args)
+    if hub is not None:
+        finished = process_one_hub(
+            hub,
+            tags=list(args.tag),
             workspace=args.workspace,
             coreme_cmd=_coreme_cmd(args),
             timeout_sec=args.timeout_sec,
         )
+    else:
+        with _open_queue(args) as queue:
+            finished = process_one(
+                queue,
+                workspace=args.workspace,
+                coreme_cmd=_coreme_cmd(args),
+                timeout_sec=args.timeout_sec,
+            )
     if finished is None:
         print("status=idle")
         return 0
@@ -176,14 +216,25 @@ def _cmd_once(args: argparse.Namespace) -> int:
 
 
 def _cmd_drain(args: argparse.Namespace) -> int:
-    with _open_queue(args) as queue:
-        done = drain(
-            queue,
+    hub = _hub_client(args)
+    if hub is not None:
+        done = drain_hub(
+            hub,
+            tags=list(args.tag),
             workspace=args.workspace,
             coreme_cmd=_coreme_cmd(args),
             max_items=args.max,
             timeout_sec=args.timeout_sec,
         )
+    else:
+        with _open_queue(args) as queue:
+            done = drain(
+                queue,
+                workspace=args.workspace,
+                coreme_cmd=_coreme_cmd(args),
+                max_items=args.max,
+                timeout_sec=args.timeout_sec,
+            )
     if not done:
         print("status=idle count=0")
         return 0
