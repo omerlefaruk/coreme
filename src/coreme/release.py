@@ -60,12 +60,11 @@ def zip_tree(root: str | Path) -> bytes:
     src = Path(root)
     if not src.is_dir():
         raise ReleaseError(f"not a directory: {src}")
+    files = collect_files(src)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(src.rglob("*")):
-            if not path.is_file():
-                continue
-            archive.write(path, path.relative_to(src).as_posix())
+        for relative, absolute in files:
+            archive.write(absolute, relative)
     return buf.getvalue()
 
 

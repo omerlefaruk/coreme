@@ -11,6 +11,7 @@ from helpers import write_job
 
 from coreme.release import (
     ReleaseError,
+    collect_files,
     hash_hex,
     parse_hash,
     tree_hash,
@@ -39,9 +40,23 @@ def test_tree_hash_matches_ship_alias(tmp_path: Path) -> None:
 
 def test_zip_round_trip_preserves_tree_hash(tmp_path: Path) -> None:
     job = write_job(tmp_path / "hello", name="hello", version="1.0.0")
+    # STD-2 regression: excluded entries present before zipping must not leak
+    # into the payload (payload == hashed set, one collector, one truth).
+    (job / "RELEASE.json").write_text('{"content_hash": "stale"}', encoding="utf-8")
+    (job / "junk.pyc").write_bytes(b"junk")
+    pycache = job / "__pycache__"
+    pycache.mkdir()
+    (pycache / "mod.pyc").write_bytes(b"compiled")
     digest, count = tree_hash(job)
+    payload = zip_tree(job)
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        names = [info.filename for info in archive.infolist()]
+    assert names == [relative for relative, _ in collect_files(job)]
+    assert "RELEASE.json" not in names
+    assert "junk.pyc" not in names
+    assert not any(name.startswith("__pycache__") for name in names)
     dest = tmp_path / "unpacked"
-    unzip_tree(zip_tree(job), dest)
+    unzip_tree(payload, dest)
     got, got_count = tree_hash(dest)
     assert got == digest
     assert got_count == count
