@@ -1,9 +1,10 @@
 """Codex repair coordinator: brief + spawn host ``codex exec`` + write repair.json.
 
-Jobs never call an LLM. This module runs **after** a failed Run (manual or
-``--auto-repair``). Edits target **source** only; never ``releases/``.
+Day 7 repair runs **after** a failed Run (manual or ``--auto-repair``).
+It must not enable, copy, or reuse a Job's runtime-Codex contract.
+Edits target **source** only; never ``releases/``.
 
-Source discovery: :mod:`coreme.repair_source`. Spawn/env: :mod:`coreme.repair_spawn`.
+Spawn/env: :mod:`coreme.repair_spawn`.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from typing import Any
 
 from coreme.brief import BriefError, assemble_brief, extract_crash_signature, find_fail_png
 from coreme.events import append_event, fail_path
-from coreme.repair_source import load_run_json, resolve_source
+from coreme.manifest import ManifestError, load_manifest
 from coreme.repair_spawn import (
     CODEX_LOG,
     CODEX_SUMMARY,
@@ -61,6 +62,9 @@ REPAIR_PROVE_ENV = "COREME_REPAIR_PROVE"
 REPAIR_RERUN_ENV = "COREME_REPAIR_RERUN"
 REPAIR_JSON = "repair.json"
 REPAIR_BRIEF = "repair-brief.md"
+_SKIP_DIR_NAMES = frozenset(
+    {"releases", "runs", ".git", ".venv", "venv", "src", "tests", "__pycache__"}
+)
 
 
 @dataclass(frozen=True)
@@ -327,11 +331,9 @@ def execute_repair(
     )
 
     env = cleaned_codex_env(secret_names)
-    runner = spawn if spawn is not None else default_spawn
     try:
-        # Custom spawn callables (tests) may not accept quiet/log_path.
-        try:
-            exit_code = runner(
+        if spawn is None:
+            exit_code = default_spawn(
                 argv,
                 cwd=str(source),
                 env=env,
@@ -339,8 +341,8 @@ def execute_repair(
                 log_path=codex_log,
                 quiet=quiet,
             )
-        except TypeError:
-            exit_code = runner(
+        else:
+            exit_code = spawn(
                 argv,
                 cwd=str(source),
                 env=env,
@@ -479,6 +481,122 @@ def read_repair(run_dir: str | Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def resolve_source(
+    run_path: str | Path,
+    repo_root: Path,
+    *,
+    run_data: dict[str, Any] | None = None,
+) -> Path | None:
+    """Locate the editable source Job for this Run. Never returns a release path to patch."""
+    root = Path(run_path).resolve()
+    data = run_data if run_data is not None else load_run_json(root)
+    if not data:
+        return None
+
+    job_name = str(data.get("job") or "")
+    is_release = bool(data.get("release"))
+    job_path_raw = data.get("job_path")
+    job_path = Path(str(job_path_raw)).resolve() if job_path_raw else None
+
+    if not is_release:
+        if job_path is not None and is_job_dir(job_path, expected_name=job_name or None):
+            if looks_like_release(job_path):
+                return find_source_by_name(repo_root, job_name) if job_name else None
+            return job_path
+        if job_name:
+            return find_source_by_name(repo_root, job_name)
+        return None
+
+    if not job_name:
+        return None
+    return find_source_by_name(repo_root, job_name)
+
+
+def load_run_json(run_path: Path) -> dict[str, Any] | None:
+    path = run_path / "run.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def is_job_dir(path: Path, *, expected_name: str | None = None) -> bool:
+    if not path.is_dir() or not (path / "JOB.toml").is_file():
+        return False
+    try:
+        manifest = load_manifest(path)
+    except ManifestError:
+        return False
+    if expected_name is None:
+        return True
+    return manifest.name == expected_name
+
+
+def looks_like_release(path: Path) -> bool:
+    if (path / "RELEASE.json").is_file():
+        return True
+    parts = {p.lower() for p in path.parts}
+    return "releases" in parts
+
+
+def find_source_by_name(repo_root: Path, job_name: str) -> Path | None:
+    if not job_name:
+        return None
+    root = repo_root.resolve()
+    preferred = [
+        root / job_name,
+        root / "examples" / job_name,
+    ]
+    for candidate in preferred:
+        if is_job_dir(candidate, expected_name=job_name) and not looks_like_release(candidate):
+            return candidate.resolve()
+
+    matches: list[Path] = []
+    try:
+        children = list(root.iterdir())
+    except OSError:
+        return None
+    for child in children:
+        if not child.is_dir():
+            continue
+        if child.name in _SKIP_DIR_NAMES:
+            continue
+        if looks_like_release(child):
+            continue
+        if is_job_dir(child, expected_name=job_name):
+            matches.append(child.resolve())
+        if child.name == "examples":
+            continue
+        try:
+            sub_children = list(child.iterdir())
+        except OSError:
+            continue
+        for sub in sub_children:
+            if (
+                sub.is_dir()
+                and is_job_dir(sub, expected_name=job_name)
+                and not looks_like_release(sub)
+            ):
+                matches.append(sub.resolve())
+
+    uniq: list[Path] = []
+    seen: set[str] = set()
+    for match in matches:
+        key = str(match)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(match)
+    if len(uniq) == 1:
+        return uniq[0]
+    named = [m for m in uniq if m.name == job_name]
+    if len(named) == 1:
+        return named[0]
+    return None
 
 
 def next_steps_text(source_path: str | None) -> str:

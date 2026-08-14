@@ -17,7 +17,8 @@ AI-native RPA kernel. Agent = developer. Job = program. Runner = dumb robot.
 | `release.py` | Tree hash, hash form, zip pack/unpack |
 | `ship.py` | Freeze a proven Job as a Release |
 | `runner.py` | Run one Job |
-| `repair.py` | Failed Run → brief → spawn → repair.json |
+| `repair.py` | Failed Run → source → brief → spawn → repair.json |
+| `repair_spawn.py` | Codex spawn adapter |
 | `brief.py` | Assemble repair markdown |
 | `cli.py` | Kernel console |
 
