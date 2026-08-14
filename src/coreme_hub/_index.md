@@ -8,6 +8,7 @@ Thin fleet hub (F3): claim loop, hashed release catalog, fail evidence.
 
 - CLI `coreme-hub`: `migrate`, `serve`, `register`, `enqueue`, `list`, `show`
 - HTTP `/v1/machines/*`, `/v1/assignments/*`, `/v1/releases/*` — [FLEET.md](../../docs/days/FLEET.md)
+- Store: `heartbeat`, `claim`, `renew`, `complete`, `enqueue`, `put_evidence`. HTTP status lives in `http.py`.
 
 ## File map
 
@@ -15,7 +16,7 @@ Thin fleet hub (F3): claim loop, hashed release catalog, fail evidence.
 |------|------|
 | `db.py` | DSN, schema, migrate |
 | `blobs.py` | Blob/evidence paths and storage |
-| `store.py` | Claim / catalog / evidence |
+| `store.py` | Claim, enqueue, catalog, evidence |
 | `http.py` | stdlib HTTP + bearer tokens |
 | `cli.py` | Ops console |
 

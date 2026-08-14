@@ -20,7 +20,7 @@ from helpers import make_repo, write_job
 from coreme_agent.cli import main as agent_main
 from coreme_agent.hub import HubClient
 from coreme_hub.blobs import hash_hex
-from coreme_hub.db import HubError, connect, hash_token, migrate
+from coreme_hub.db import StoreError, connect, hash_token, migrate
 from coreme_hub.http import parse_bind, serve
 from coreme_hub.store import (
     STATUS_CLAIMED,
@@ -30,10 +30,13 @@ from coreme_hub.store import (
     claim,
     complete,
     create_assignment,
+    enqueue,
     get_assignment,
     heartbeat,
     list_attempts,
+    put_evidence,
     renew,
+    upsert_release,
 )
 
 OPS = "ops-secret"
@@ -221,7 +224,7 @@ def test_stale_attempt_cannot_complete_after_reclaim(pg_dsn: str, schema: str) -
         second = claim(conn, machine_id="m1")
         assert second is not None
         assert second["attempt_id"] != first["attempt_id"]
-        with pytest.raises(HubError) as exc:
+        with pytest.raises(StoreError) as exc:
             complete(
                 conn,
                 assignment_id="a4",
@@ -230,7 +233,7 @@ def test_stale_attempt_cannot_complete_after_reclaim(pg_dsn: str, schema: str) -
                 status=STATUS_SUCCEEDED,
                 exit_code=0,
             )
-        assert exc.value.status == 409
+        assert exc.value.kind == "conflict"
         done = complete(
             conn,
             assignment_id="a4",
@@ -242,12 +245,63 @@ def test_stale_attempt_cannot_complete_after_reclaim(pg_dsn: str, schema: str) -
         assert done["status"] == STATUS_SUCCEEDED
 
 
+def test_stale_attempt_cannot_put_evidence_after_reclaim(
+    pg_dsn: str, schema: str, tmp_path: Path
+) -> None:
+    with connect(pg_dsn, schema) as conn:
+        _register(conn, "m1", "tok-a", [])
+        _enqueue(conn, assignment_id="a-ev", lease_seconds=1)
+        first = claim(conn, machine_id="m1")
+        assert first is not None
+        conn.execute(
+            "UPDATE assignments SET lease_until = now() - interval '1 second' WHERE id = %s",
+            ("a-ev",),
+        )
+        second = claim(conn, machine_id="m1")
+        assert second is not None
+        with pytest.raises(StoreError) as exc:
+            put_evidence(
+                conn,
+                data_dir=tmp_path,
+                assignment_id="a-ev",
+                attempt_id=str(first["attempt_id"]),
+                machine_id="m1",
+                payload=b"PK\x03\x04fake",
+            )
+        assert exc.value.kind == "conflict"
+        row = put_evidence(
+            conn,
+            data_dir=tmp_path,
+            assignment_id="a-ev",
+            attempt_id=str(second["attempt_id"]),
+            machine_id="m1",
+            payload=b"PK\x03\x04fake",
+        )
+        assert row["evidence_bytes"] == 12
+
+
+def test_enqueue_uses_catalog(pg_dsn: str, schema: str) -> None:
+    with connect(pg_dsn, schema) as conn:
+        upsert_release(
+            conn,
+            content_hash=_DUMMY_HASH,
+            name="greet",
+            version="1.0.0",
+            blob_url=_DUMMY_BLOB,
+            size_bytes=1,
+        )
+        row = enqueue(conn, name="greet", version="1.0.0")
+        assert row["status"] == STATUS_PENDING
+        assert row["content_hash"] == _DUMMY_HASH
+        assert row["blob_url"] == _DUMMY_BLOB
+
+
 def test_wrong_token_rejected(pg_dsn: str, schema: str) -> None:
     with connect(pg_dsn, schema) as conn:
         _register(conn, "m1", "tok-a", [])
-        with pytest.raises(HubError) as exc:
+        with pytest.raises(StoreError) as exc:
             heartbeat(conn, machine_id="m1", token="other", tags=[])
-        assert exc.value.status == 403
+        assert exc.value.kind == "forbidden"
 
 
 @pytest.fixture

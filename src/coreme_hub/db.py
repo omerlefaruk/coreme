@@ -94,8 +94,24 @@ ALTER TABLE attempts ADD COLUMN IF NOT EXISTS evidence_sha256 TEXT;
 """
 
 
+class StoreError(Exception):
+    """Hub store error. HTTP status is mapped in the HTTP adapter."""
+
+    def __init__(self, kind: str, message: str) -> None:
+        self.kind = kind
+        super().__init__(message)
+
+
+STORE_STATUS = {
+    "bad_request": 400,
+    "forbidden": 403,
+    "not_found": 404,
+    "conflict": 409,
+}
+
+
 class HubError(Exception):
-    """Hub domain error with an HTTP status."""
+    """HTTP adapter error with a status code."""
 
     def __init__(self, status: int, message: str) -> None:
         self.status = status

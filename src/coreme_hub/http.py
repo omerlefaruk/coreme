@@ -11,12 +11,12 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from coreme_hub.blobs import ensure_data_dir, parse_hash, read_blob
-from coreme_hub.db import HubError, connect
+from coreme_hub.db import STORE_STATUS, HubError, StoreError, connect, hash_token
 from coreme_hub.store import (
     assignment_public,
     claim,
     complete,
-    create_assignment,
+    enqueue,
     evidence_index,
     get_assignment,
     get_evidence_bytes,
@@ -24,13 +24,11 @@ from coreme_hub.store import (
     latest_evidence,
     list_assignments,
     list_machines,
-    machine_by_token,
     machine_public,
     put_evidence,
     register_zip,
     release_public,
     renew,
-    resolve_release_spec,
     upsert_release,
 )
 
@@ -81,6 +79,9 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
             query = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
             try:
                 status, body = self._route(method, parts, query)
+            except StoreError as exc:
+                self._send(STORE_STATUS.get(exc.kind, 500), {"error": str(exc)})
+                return
             except HubError as exc:
                 self._send(exc.status, {"error": str(exc)})
                 return
@@ -213,23 +214,13 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
                 if not isinstance(release, dict):
                     raise HubError(400, "release object is required")
                 with connect(ctx.dsn, ctx.schema) as conn:
-                    spec = resolve_release_spec(
+                    row = enqueue(
                         conn,
                         name=_opt_str(release.get("name")),
                         version=_opt_str(release.get("version")),
                         content_hash=_opt_str(release.get("content_hash")),
                         blob_url=_opt_str(release.get("blob_url")),
                         size_bytes=_opt_int(release.get("size_bytes")),
-                    )
-                    if not spec.get("name"):
-                        raise HubError(400, "release.name is required")
-                    row = create_assignment(
-                        conn,
-                        release_name=str(spec["name"]),
-                        release_version=str(spec.get("version") or "0.0.0"),
-                        content_hash=str(spec["content_hash"]),
-                        blob_url=str(spec["blob_url"]),
-                        size_bytes=_opt_int(spec.get("size_bytes")),
                         inputs=_str_dict(body.get("inputs")),
                         secret_names=parse_tags(_as_str_list(body.get("secret_names"))),
                         required_tags=parse_tags(_as_str_list(body.get("required_tags"))),
@@ -339,14 +330,14 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
             if token == ctx.ops_token:
                 return None
             with connect(ctx.dsn, ctx.schema) as conn:
-                return machine_by_token(conn, token)
+                return _machine_by_token(conn, token)
 
         def _require_machine(self) -> dict[str, Any]:
             token = self._bearer()
             if token == ctx.ops_token:
                 raise HubError(403, "machine token required")
             with connect(ctx.dsn, ctx.schema) as conn:
-                row = machine_by_token(conn, token)
+                row = _machine_by_token(conn, token)
             if row is None:
                 raise HubError(401, "unknown machine token")
             return row
@@ -392,6 +383,13 @@ def serve(
     host, port = parse_bind(bind)
     httpd = ThreadingHTTPServer((host, port), make_handler(ctx))
     return httpd
+
+
+def _machine_by_token(conn: Any, token: str) -> dict[str, Any] | None:
+    return conn.execute(
+        "SELECT * FROM machines WHERE token_hash = %s",
+        (hash_token(token),),
+    ).fetchone()
 
 
 def _as_str_list(value: object) -> list[str]:

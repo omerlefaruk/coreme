@@ -9,14 +9,12 @@ import sys
 from pathlib import Path
 
 from coreme_hub import __version__
-from coreme_hub.db import HubError, connect, migrate, resolve_dsn
+from coreme_hub.db import HubError, StoreError, connect, migrate, resolve_dsn
 from coreme_hub.http import serve as serve_http
 from coreme_hub.store import (
     assignment_public,
-    create_assignment,
+    enqueue,
     get_assignment,
-    get_release,
-    get_release_by_name,
     latest_evidence,
     list_assignments,
     list_attempts,
@@ -120,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_list(dsn, args)
         if args.command == "show":
             return _cmd_show(dsn, args)
-    except HubError as exc:
+    except (HubError, StoreError) as exc:
         print(f"error={exc}", file=sys.stderr)
         return 2
     parser.error(f"unknown command {args.command!r}")
@@ -152,20 +150,11 @@ def _cmd_enqueue(dsn: str, args: argparse.Namespace) -> int:
         raise HubError(400, "enqueue needs --release or --content-hash")
     inputs = _pairs(args.input)
     with connect(dsn) as conn:
-        catalog = None
-        if args.content_hash:
-            catalog = get_release(conn, args.content_hash)
-        if catalog is None and args.release:
-            catalog = get_release_by_name(conn, args.release, args.version)
-        if catalog is None:
-            raise HubError(404, "unknown release; register it first")
-        row = create_assignment(
+        row = enqueue(
             conn,
-            release_name=str(catalog["name"]),
-            release_version=str(catalog["version"]),
-            content_hash=str(catalog["content_hash"]),
-            blob_url=str(catalog["blob_url"]),
-            size_bytes=catalog["size_bytes"],
+            name=args.release,
+            version=args.version,
+            content_hash=args.content_hash,
             inputs=inputs,
             secret_names=list(args.secret_name),
             required_tags=list(args.tag),

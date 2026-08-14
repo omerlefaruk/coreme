@@ -24,7 +24,7 @@ from coreme_hub.blobs import (
     write_evidence_zip,
     zip_tree,
 )
-from coreme_hub.db import DEFAULT_LEASE_SECONDS, HubError, hash_token
+from coreme_hub.db import DEFAULT_LEASE_SECONDS, StoreError, hash_token
 
 STATUS_PENDING = "pending"
 STATUS_CLAIMED = "claimed"
@@ -71,7 +71,7 @@ def heartbeat(
         (machine_id, token_hash, tags, status, agent_version, running_assignment_id),
     ).fetchone()
     if row is None:
-        raise HubError(403, "machine token does not match")
+        raise StoreError("forbidden", "machine token does not match")
     return row
 
 
@@ -83,7 +83,6 @@ def create_assignment(
     content_hash: str,
     blob_url: str,
     size_bytes: int | None = None,
-    release_path: str | None = None,
     inputs: dict[str, str] | None = None,
     secret_names: list[str] | None = None,
     required_tags: list[str] | None = None,
@@ -92,13 +91,13 @@ def create_assignment(
     batch_id: str | None = None,
 ) -> dict[str, Any]:
     if lease_seconds < 1:
-        raise HubError(400, "lease_seconds must be >= 1")
+        raise StoreError("bad_request", "lease_seconds must be >= 1")
     digest = parse_hash(content_hash)
     url = (blob_url or "").strip()
     if not url:
-        raise HubError(400, "blob_url is required")
+        raise StoreError("bad_request", "blob_url is required")
     if not (release_name or "").strip():
-        raise HubError(400, "release.name is required")
+        raise StoreError("bad_request", "release.name is required")
     row = conn.execute(
         """
         INSERT INTO assignments (
@@ -117,7 +116,7 @@ def create_assignment(
             digest,
             url,
             size_bytes,
-            release_path,
+            None,
             Jsonb(inputs or {}),
             secret_names or [],
             required_tags or [],
@@ -127,6 +126,47 @@ def create_assignment(
     ).fetchone()
     assert row is not None
     return row
+
+
+def enqueue(
+    conn: Connection[dict[str, Any]],
+    *,
+    name: str | None = None,
+    version: str | None = None,
+    content_hash: str | None = None,
+    blob_url: str | None = None,
+    size_bytes: int | None = None,
+    inputs: dict[str, str] | None = None,
+    secret_names: list[str] | None = None,
+    required_tags: list[str] | None = None,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    assignment_id: str | None = None,
+    batch_id: str | None = None,
+) -> dict[str, Any]:
+    spec = resolve_release_spec(
+        conn,
+        name=name,
+        version=version,
+        content_hash=content_hash,
+        blob_url=blob_url,
+        size_bytes=size_bytes,
+    )
+    if not spec.get("name"):
+        raise StoreError("bad_request", "release.name is required")
+    return create_assignment(
+        conn,
+        release_name=str(spec["name"]),
+        release_version=str(spec.get("version") or "0.0.0"),
+        content_hash=str(spec["content_hash"]),
+        blob_url=str(spec["blob_url"]),
+        size_bytes=spec.get("size_bytes") if isinstance(spec.get("size_bytes"), int) else None,
+        inputs=inputs,
+        secret_names=secret_names,
+        required_tags=required_tags,
+        lease_seconds=lease_seconds,
+        assignment_id=assignment_id,
+        batch_id=batch_id,
+    )
 
 
 def claim(
@@ -139,7 +179,7 @@ def claim(
         (machine_id,),
     ).fetchone()
     if machine is None:
-        raise HubError(403, "unknown machine; heartbeat first")
+        raise StoreError("forbidden", "unknown machine; heartbeat first")
     tags = list(machine["tags"] or [])
     picked = conn.execute(
         """
@@ -253,7 +293,7 @@ def complete(
 ) -> dict[str, Any]:
     status = COMPLETE_ALIASES.get(status, status)
     if status not in COMPLETE_OK:
-        raise HubError(400, f"invalid complete status {status!r}")
+        raise StoreError("bad_request", f"invalid complete status {status!r}")
     fence = _require_attempt_id(attempt_id)
     row = conn.execute(
         """
@@ -332,19 +372,19 @@ def register_tree(
 ) -> dict[str, Any]:
     root = Path(source)
     if not root.is_dir():
-        raise HubError(400, f"release path is not a directory: {root}")
+        raise StoreError("bad_request", f"release path is not a directory: {root}")
     recorded: str | None = None
     if (root / "RELEASE.json").is_file():
         try:
             recorded = verify_release(root)
         except ReleaseError as exc:
-            raise HubError(400, f"release verify failed: {exc}") from exc
+            raise StoreError("bad_request", f"release verify failed: {exc}") from exc
     try:
         content_hash, file_count = tree_hash(root)
     except ReleaseError as exc:
-        raise HubError(400, f"cannot hash release: {exc}") from exc
+        raise StoreError("bad_request", f"cannot hash release: {exc}") from exc
     if recorded is not None and recorded != content_hash:
-        raise HubError(400, "RELEASE.json hash does not match tree")
+        raise StoreError("bad_request", "RELEASE.json hash does not match tree")
     rel_name, rel_version = _identity(root, name, version)
     payload = zip_tree(root)
     write_blob(data_dir, content_hash, payload)
@@ -369,7 +409,7 @@ def register_zip(
     version: str | None = None,
 ) -> dict[str, Any]:
     if not payload:
-        raise HubError(400, "release zip is empty")
+        raise StoreError("bad_request", "release zip is empty")
     tmp = Path(tempfile.mkdtemp(prefix="coreme-hub-rel-"))
     try:
         unzip_tree(payload, tmp)
@@ -390,24 +430,26 @@ def upsert_release(
 ) -> dict[str, Any]:
     digest = parse_hash(content_hash)
     if not (name or "").strip():
-        raise HubError(400, "release.name is required")
+        raise StoreError("bad_request", "release.name is required")
     if size_bytes < 0:
-        raise HubError(400, "size_bytes must be >= 0")
+        raise StoreError("bad_request", "size_bytes must be >= 0")
     if not blob_url.strip():
-        raise HubError(400, "blob_url is required")
+        raise StoreError("bad_request", "blob_url is required")
     existing_hash = conn.execute(
         "SELECT * FROM releases WHERE name = %s AND version = %s",
         (name, version),
     ).fetchone()
     if existing_hash is not None and existing_hash["content_hash"] != digest:
-        raise HubError(409, "release name+version already registered with a different hash")
+        raise StoreError(
+            "conflict", "release name+version already registered with a different hash"
+        )
     same = conn.execute(
         "SELECT * FROM releases WHERE content_hash = %s",
         (digest,),
     ).fetchone()
     if same is not None:
         if same["name"] != name or same["version"] != version:
-            raise HubError(409, "content_hash already registered under a different name")
+            raise StoreError("conflict", "content_hash already registered under a different name")
         return same
     row = conn.execute(
         """
@@ -423,14 +465,14 @@ def upsert_release(
     return row
 
 
-def get_release(conn: Connection[dict[str, Any]], content_hash: str) -> dict[str, Any] | None:
+def _get_release(conn: Connection[dict[str, Any]], content_hash: str) -> dict[str, Any] | None:
     return conn.execute(
         "SELECT * FROM releases WHERE content_hash = %s",
         (parse_hash(content_hash),),
     ).fetchone()
 
 
-def get_release_by_name(
+def _get_release_by_name(
     conn: Connection[dict[str, Any]],
     name: str,
     version: str,
@@ -452,7 +494,7 @@ def resolve_release_spec(
 ) -> dict[str, Any]:
     if content_hash and blob_url:
         digest = parse_hash(content_hash)
-        catalog = get_release(conn, digest)
+        catalog = _get_release(conn, digest)
         return {
             "name": (name or (catalog["name"] if catalog else "") or "").strip(),
             "version": version or (catalog["version"] if catalog else "0.0.0"),
@@ -464,11 +506,11 @@ def resolve_release_spec(
         }
     catalog = None
     if content_hash:
-        catalog = get_release(conn, content_hash)
+        catalog = _get_release(conn, content_hash)
     elif name:
-        catalog = get_release_by_name(conn, name, version or "0.0.0")
+        catalog = _get_release_by_name(conn, name, version or "0.0.0")
     if catalog is None:
-        raise HubError(404, "unknown release; register it first")
+        raise StoreError("not_found", "unknown release; register it first")
     return dict(catalog)
 
 
@@ -482,18 +524,25 @@ def put_evidence(
     payload: bytes,
 ) -> dict[str, Any]:
     if not payload:
-        raise HubError(400, "evidence zip is empty")
+        raise StoreError("bad_request", "evidence zip is empty")
     fence = _require_attempt_id(attempt_id)
+    live = conn.execute(
+        """
+        SELECT id FROM assignments
+         WHERE id = %s
+           AND claimed_by = %s
+           AND attempt_id = %s
+        """,
+        (assignment_id, machine_id, fence),
+    ).fetchone()
+    if live is None:
+        _raise_fence_miss(conn, assignment_id)
     attempt = conn.execute(
         "SELECT * FROM attempts WHERE id = %s",
         (fence,),
     ).fetchone()
     if attempt is None:
-        raise HubError(404, "unknown attempt")
-    if attempt["assignment_id"] != assignment_id:
-        raise HubError(409, "attempt does not belong to this assignment")
-    if attempt["machine_id"] != machine_id:
-        raise HubError(403, "attempt belongs to a different machine")
+        raise StoreError("not_found", "unknown attempt")
     digest = sha256_bytes(payload)
     write_evidence_zip(data_dir, assignment_id, fence, payload)
     row = conn.execute(
@@ -534,7 +583,7 @@ def get_evidence_bytes(
             (assignment_id,),
         ).fetchone()
     if attempt is None or attempt.get("evidence_bytes") is None:
-        raise HubError(404, "evidence not found")
+        raise StoreError("not_found", "evidence not found")
     payload = read_evidence_zip(data_dir, assignment_id, str(attempt["id"]))
     return attempt, payload
 
@@ -610,7 +659,7 @@ def list_machines(conn: Connection[dict[str, Any]]) -> list[dict[str, Any]]:
 def _require_attempt_id(attempt_id: str | None) -> str:
     value = (attempt_id or "").strip()
     if not value:
-        raise HubError(400, "attempt_id is required")
+        raise StoreError("bad_request", "attempt_id is required")
     return value
 
 
@@ -620,15 +669,8 @@ def _raise_fence_miss(conn: Connection[dict[str, Any]], assignment_id: str) -> N
         (assignment_id,),
     ).fetchone()
     if existing is None:
-        raise HubError(404, "unknown assignment")
-    raise HubError(409, "assignment is not claimed by this attempt")
-
-
-def machine_by_token(conn: Connection[dict[str, Any]], token: str) -> dict[str, Any] | None:
-    return conn.execute(
-        "SELECT * FROM machines WHERE token_hash = %s",
-        (hash_token(token),),
-    ).fetchone()
+        raise StoreError("not_found", "unknown assignment")
+    raise StoreError("conflict", "assignment is not claimed by this attempt")
 
 
 def assignment_public(
@@ -707,7 +749,7 @@ def _identity(root: Path, name: str | None, version: str | None) -> tuple[str, s
         manifest = load_manifest(root)
     except ManifestError as exc:
         if not name:
-            raise HubError(400, f"cannot read JOB.toml: {exc}") from exc
+            raise StoreError("bad_request", f"cannot read JOB.toml: {exc}") from exc
         return name, version or "0.0.0"
     return name or manifest.name, version or manifest.version
 

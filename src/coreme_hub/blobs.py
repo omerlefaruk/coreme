@@ -8,21 +8,21 @@ from pathlib import Path
 
 from coreme import release as release_identity
 from coreme.release import ReleaseError
-from coreme_hub.db import HubError
+from coreme_hub.db import StoreError
 
 
 def parse_hash(value: str | None) -> str:
     try:
         return release_identity.parse_hash(value)
     except ReleaseError as exc:
-        raise HubError(400, str(exc)) from exc
+        raise StoreError("bad_request", str(exc)) from exc
 
 
 def hash_hex(value: str) -> str:
     try:
         return release_identity.hash_hex(value)
     except ReleaseError as exc:
-        raise HubError(400, str(exc)) from exc
+        raise StoreError("bad_request", str(exc)) from exc
 
 
 def ensure_data_dir(data_dir: str | Path) -> Path:
@@ -43,14 +43,14 @@ def zip_tree(root: str | Path) -> bytes:
     try:
         return release_identity.zip_tree(root)
     except ReleaseError as exc:
-        raise HubError(400, str(exc)) from exc
+        raise StoreError("bad_request", str(exc)) from exc
 
 
 def unzip_tree(payload: bytes, dest: str | Path) -> None:
     try:
         release_identity.unzip_tree(payload, dest)
     except ReleaseError as exc:
-        raise HubError(400, str(exc)) from exc
+        raise StoreError("bad_request", str(exc)) from exc
 
 
 def write_blob(data_dir: str | Path, content_hash: str, payload: bytes) -> Path:
@@ -65,7 +65,7 @@ def write_blob(data_dir: str | Path, content_hash: str, payload: bytes) -> Path:
 def read_blob(data_dir: str | Path, content_hash: str) -> bytes:
     path = blob_path(data_dir, content_hash)
     if not path.is_file():
-        raise HubError(404, "release blob not found")
+        raise StoreError("not_found", "release blob not found")
     return path.read_bytes()
 
 
@@ -83,7 +83,7 @@ def write_evidence_zip(
 def read_evidence_zip(data_dir: str | Path, assignment_id: str, attempt_id: str) -> bytes:
     path = evidence_file(data_dir, assignment_id, attempt_id)
     if not path.is_file():
-        raise HubError(404, "evidence not found")
+        raise StoreError("not_found", "evidence not found")
     return path.read_bytes()
 
 
