@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
 import shutil
-import stat
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,17 +14,21 @@ from coreme import __version__
 from coreme.manifest import ManifestError, load_manifest
 from coreme.paths import (
     assert_safe_job_path,
-    is_reparse,
-    lstat,
     reject_link,
     require_regular_file,
 )
 from coreme.proof import test_job
+from coreme.release import (
+    EXCLUDE_DIRS,
+    EXCLUDE_SUFFIXES,
+    HASH_RE,
+    ReleaseError,
+    collect_files,
+    tree_hash,
+)
 from coreme.util import iso_utc, json_dumps
 
 VERSION_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._]*[A-Za-z0-9])?$")
-EXCLUDE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".git"})
-EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 RELEASE_KEYS = frozenset(
     {
         "name",
@@ -40,25 +42,13 @@ RELEASE_KEYS = frozenset(
 )
 
 
-class ShipError(Exception):
+class ShipError(ReleaseError):
     """Ship or release verification failed."""
 
 
 def hash_job_tree(job_path: str | Path) -> tuple[str, int]:
     """Return (content_hash, file_count) for a Job/Release tree."""
-    files = _collect_files(Path(job_path))
-    digest = hashlib.sha256()
-    for relative, absolute in files:
-        path_bytes = relative.encode("utf-8")
-        digest.update(len(path_bytes).to_bytes(8, "big"))
-        digest.update(path_bytes)
-        try:
-            data = absolute.read_bytes()
-        except OSError as error:
-            raise ShipError(f"Cannot read {absolute}: {error}") from error
-        digest.update(len(data).to_bytes(8, "big"))
-        digest.update(data)
-    return f"sha256:{digest.hexdigest()}", len(files)
+    return tree_hash(job_path, error_cls=ShipError)
 
 
 def ship_job(job_path: str | Path, repo_root: Path) -> tuple[Path, str]:
@@ -157,9 +147,7 @@ def verify_release(job_path: str | Path) -> str:
     for key in ("name", "version", "shipped_at", "source_path", "coreme_version"):
         if not isinstance(raw[key], str) or not raw[key]:
             raise ShipError(f"RELEASE.json {key} must be a non-empty string")
-    if not isinstance(recorded_hash, str) or not re.fullmatch(
-        r"sha256:[0-9a-f]{64}", recorded_hash
-    ):
+    if not isinstance(recorded_hash, str) or not HASH_RE.fullmatch(recorded_hash):
         raise ShipError("RELEASE.json content_hash must be sha256: + 64 lowercase hex")
     if not isinstance(file_count, int) or isinstance(file_count, bool) or file_count < 0:
         raise ShipError("RELEASE.json file_count must be a non-negative integer")
@@ -199,39 +187,8 @@ def _ensure_releases_dir(releases: Path) -> Path:
     return releases
 
 
-def _collect_files(root: Path) -> list[tuple[str, Path]]:
-    reject_link(root, "Job root", error_cls=ShipError)
-    if not root.is_dir():
-        raise ShipError(f"Job path is not a directory: {root}")
-    root_resolved = root.resolve()
-    collected: list[tuple[str, Path]] = []
-    for dirpath, dirnames, filenames in _walk(root, topdown=True):
-        base = Path(dirpath)
-        if base != root:
-            reject_link(base, "directory", error_cls=ShipError)
-        for name in sorted(dirnames):
-            child = base / name
-            reject_link(child, "directory", error_cls=ShipError)
-            _reject_outside(child, root_resolved)
-        dirnames[:] = [name for name in dirnames if name not in EXCLUDE_DIRS]
-        for name in sorted(filenames):
-            path = base / name
-            relative = path.relative_to(root).as_posix()
-            st = lstat(path, error_cls=ShipError)
-            if stat.S_ISLNK(st.st_mode) or is_reparse(st):
-                raise ShipError(f"Symbolic link or reparse point not allowed (file): {path}")
-            if not stat.S_ISREG(st.st_mode):
-                raise ShipError(f"Not a regular file: {path}")
-            _reject_outside(path, root_resolved)
-            if name.endswith(EXCLUDE_SUFFIXES) or relative == "RELEASE.json":
-                continue
-            collected.append((relative, path))
-    collected.sort(key=lambda item: item[0])
-    return collected
-
-
 def _copy_tree(source: Path, destination: Path) -> None:
-    for relative, absolute in _collect_files(source):
+    for relative, absolute in collect_files(source, error_cls=ShipError):
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -279,12 +236,3 @@ def _walk(root: Path, *, topdown: bool):
 
 def _walk_error(error: OSError) -> None:
     raise ShipError(f"Cannot walk Job tree: {error}") from error
-
-
-def _reject_outside(path: Path, root_resolved: Path) -> None:
-    try:
-        resolved = path.resolve()
-    except OSError as error:
-        raise ShipError(f"Cannot resolve {path}: {error}") from error
-    if not resolved.is_relative_to(root_resolved):
-        raise ShipError(f"Path escapes Job root: {path}")

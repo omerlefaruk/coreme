@@ -7,8 +7,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from coreme.release import zip_tree
 from coreme_agent import __version__
-from coreme_agent.cache import ReleasePullError, resolve_release, zip_tree
+from coreme_agent.cache import ReleasePullError, resolve_release
 from coreme_agent.executor import ExecResult, execute_assignment
 from coreme_agent.hub import CompletePayload, HubClient
 from coreme_agent.outbox import flush_item, flush_outbox, write_outbox

@@ -12,7 +12,8 @@ from psycopg import Connection
 from psycopg.types.json import Jsonb
 
 from coreme.manifest import ManifestError, load_manifest
-from coreme.ship import ShipError, hash_job_tree, verify_release
+from coreme.release import ReleaseError, tree_hash
+from coreme.ship import verify_release
 from coreme_hub.blobs import (
     parse_hash,
     read_evidence_zip,
@@ -336,11 +337,11 @@ def register_tree(
     if (root / "RELEASE.json").is_file():
         try:
             recorded = verify_release(root)
-        except ShipError as exc:
+        except ReleaseError as exc:
             raise HubError(400, f"release verify failed: {exc}") from exc
     try:
-        content_hash, file_count = hash_job_tree(root)
-    except ShipError as exc:
+        content_hash, file_count = tree_hash(root)
+    except ReleaseError as exc:
         raise HubError(400, f"cannot hash release: {exc}") from exc
     if recorded is not None and recorded != content_hash:
         raise HubError(400, "RELEASE.json hash does not match tree")

@@ -20,7 +20,7 @@ Fleet agent: local SQLite queue (F1) or hub claim + hash pull (F3 `--hub`).
 | `executor.py` | Contained coreme process |
 | `hub.py` | `HubClient` adapter + `CompletePayload` |
 | `hub_worker.py` | Hub Assignment run |
-| `cache.py` | Hashed release cache |
+| `cache.py` | Hashed release cache policy |
 | `outbox.py` | Complete + evidence outbox |
 | `worker.py` | Local queue drain |
 | `cli.py` | Ops console |

@@ -14,7 +14,7 @@ Thin fleet hub (F3): claim loop, hashed release catalog, fail evidence.
 | File | Role |
 |------|------|
 | `db.py` | DSN, schema, migrate |
-| `blobs.py` | Zip pack/unpack, blob paths |
+| `blobs.py` | Blob/evidence paths and storage |
 | `store.py` | Claim / catalog / evidence |
 | `http.py` | stdlib HTTP + bearer tokens |
 | `cli.py` | Ops console |

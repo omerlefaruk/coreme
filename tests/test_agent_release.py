@@ -7,8 +7,9 @@ from pathlib import Path
 import pytest
 from helpers import write_job
 
+from coreme.release import zip_tree
 from coreme.ship import hash_job_tree
-from coreme_agent.cache import ReleasePullError, resolve_release, zip_tree
+from coreme_agent.cache import ReleasePullError, resolve_release
 from coreme_agent.hub import CompletePayload, HubClientError
 from coreme_agent.outbox import flush_item, flush_outbox, load_pending, write_outbox
 
