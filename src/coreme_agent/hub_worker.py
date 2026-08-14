@@ -1,4 +1,4 @@
-"""Claim → pull hashed release → execute → complete + evidence outbox."""
+"""Hub Assignment run: claim → hash pull → execute → outbox."""
 
 from __future__ import annotations
 
@@ -10,12 +10,13 @@ from typing import Any
 from coreme_agent import __version__
 from coreme_agent.cache import ReleasePullError, resolve_release, zip_tree
 from coreme_agent.executor import ExecResult, execute_assignment
-from coreme_agent.hub import HubClient
+from coreme_agent.hub import CompletePayload, HubClient
 from coreme_agent.outbox import flush_item, flush_outbox, write_outbox
-from coreme_agent.store import STATUS_FAILED, Assignment
+from coreme_agent.run import RunOutcome, RunRequest
+from coreme_agent.store import STATUS_FAILED
 
 
-def process_one_hub(
+def process_one(
     client: HubClient,
     *,
     tags: list[str],
@@ -24,7 +25,7 @@ def process_one_hub(
     timeout_sec: float | None = None,
     cache_dir: str | Path | None = None,
     outbox_dir: str | Path | None = None,
-) -> Assignment | None:
+) -> RunOutcome | None:
     """Heartbeat, claim one Assignment, pull, run coreme, complete. None if idle."""
     root = Path(workspace).resolve() if workspace else Path.cwd()
     cache = Path(cache_dir) if cache_dir else root / ".coreme-agent" / "cache"
@@ -63,9 +64,15 @@ def process_one_hub(
             pull_fail = {"kind": "release-hash", "message": str(exc)}
             local = None
         else:
-            assignment = claimed.as_assignment(str(local))
+            request = RunRequest(
+                id=claimed.id,
+                release_path=str(local),
+                inputs=claimed.inputs,
+                batch_id=claimed.batch_id,
+                attempt_id=claimed.attempt_id,
+            )
             result = execute_assignment(
-                assignment,
+                request,
                 workspace=root,
                 coreme_cmd=coreme_cmd,
                 timeout_sec=timeout_sec,
@@ -88,23 +95,18 @@ def process_one_hub(
         stop.set()
         renewer.join(timeout=2)
         client.heartbeat(tags=tags, status="idle", agent_version=__version__)
-    return Assignment(
+    return RunOutcome(
         id=claimed.id,
-        release_path=str(local) if local is not None else claimed.content_hash,
-        inputs=claimed.inputs,
         status=result.status,
-        created_at="",
-        claimed_at=None,
-        finished_at=None,
-        batch_id=claimed.batch_id,
-        attempt_id=claimed.attempt_id,
-        run_path=result.run_path,
         exit_code=result.exit_code,
+        run_path=result.run_path,
         message=result.message,
+        attempt_id=claimed.attempt_id,
+        batch_id=claimed.batch_id,
     )
 
 
-def drain_hub(
+def drain(
     client: HubClient,
     *,
     tags: list[str],
@@ -114,10 +116,10 @@ def drain_hub(
     timeout_sec: float | None = None,
     cache_dir: str | Path | None = None,
     outbox_dir: str | Path | None = None,
-) -> list[Assignment]:
-    done: list[Assignment] = []
+) -> list[RunOutcome]:
+    done: list[RunOutcome] = []
     while max_items is None or len(done) < max_items:
-        finished = process_one_hub(
+        finished = process_one(
             client,
             tags=tags,
             workspace=workspace,
@@ -132,7 +134,7 @@ def drain_hub(
     return done
 
 
-def _complete_body(result: ExecResult, *, fail: dict[str, Any] | None) -> dict[str, Any]:
+def _complete_body(result: ExecResult, *, fail: dict[str, Any] | None) -> CompletePayload:
     fail_body = fail if fail is not None else _load_fail(result.run_path)
     log_tail = _log_tail(result)
     summary: dict[str, Any] = {
@@ -141,14 +143,14 @@ def _complete_body(result: ExecResult, *, fail: dict[str, Any] | None) -> dict[s
         "exit_code": result.exit_code,
         "message": result.message,
     }
-    return {
-        "status": result.status,
-        "run_id": result.run_path,
-        "exit_code": result.exit_code,
-        "summary": summary,
-        "fail": fail_body,
-        "log_tail": log_tail,
-    }
+    return CompletePayload(
+        status=result.status,
+        run_id=result.run_path,
+        exit_code=result.exit_code,
+        summary=summary,
+        fail=fail_body,
+        log_tail=log_tail,
+    )
 
 
 def _load_fail(run_path: str | None) -> dict[str, Any] | None:

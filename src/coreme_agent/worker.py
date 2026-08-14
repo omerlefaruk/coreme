@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from coreme_agent.executor import ExecResult, execute_assignment
-from coreme_agent.store import Assignment, LocalQueue
+from coreme_agent.run import RunOutcome, RunRequest
+from coreme_agent.store import LocalQueue
 
 
 def process_one(
@@ -14,18 +15,18 @@ def process_one(
     workspace: str | Path | None = None,
     coreme_cmd: list[str] | None = None,
     timeout_sec: float | None = None,
-) -> Assignment | None:
+) -> RunOutcome | None:
     """Claim one pending Assignment, run coreme, record Attempt. None if idle."""
-    assignment = queue.claim_next()
-    if assignment is None:
+    request = queue.claim_next()
+    if request is None:
         return None
     result = execute_assignment(
-        assignment,
+        request,
         workspace=workspace,
         coreme_cmd=coreme_cmd,
         timeout_sec=timeout_sec,
     )
-    return _finish(queue, assignment, result)
+    return _finish(queue, request, result)
 
 
 def drain(
@@ -35,9 +36,9 @@ def drain(
     coreme_cmd: list[str] | None = None,
     max_items: int | None = None,
     timeout_sec: float | None = None,
-) -> list[Assignment]:
+) -> list[RunOutcome]:
     """Process pending Assignments until empty or *max_items* reached."""
-    done: list[Assignment] = []
+    done: list[RunOutcome] = []
     while max_items is None or len(done) < max_items:
         finished = process_one(
             queue,
@@ -53,11 +54,11 @@ def drain(
 
 def _finish(
     queue: LocalQueue,
-    assignment: Assignment,
+    request: RunRequest,
     result: ExecResult,
-) -> Assignment:
+) -> RunOutcome:
     return queue.complete(
-        assignment.id,
+        request.id,
         status=result.status,
         exit_code=result.exit_code,
         run_path=result.run_path,

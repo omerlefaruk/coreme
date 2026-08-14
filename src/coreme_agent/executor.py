@@ -1,4 +1,4 @@
-"""Invoke coreme for one Assignment through a contained process tree.
+"""Invoke coreme for one run request through a contained process tree.
 
 Machine state is exactly one version-1 JSON frame read from an inherited
 anonymous pipe. Human ``--plain`` output has no authority. The CLI consumes
@@ -23,12 +23,12 @@ from typing import Any, cast
 
 from coreme._process import ProcessError, _WindowsJob
 from coreme.present import RESULT_ENV, RESULT_MAX_BYTES, RESULT_SCHEMA, RESULT_VERSION
+from coreme_agent.run import RunRequest
 from coreme_agent.store import (
     STATUS_ERROR,
     STATUS_FAILED,
     STATUS_SUCCEEDED,
     STATUS_TIMEOUT,
-    Assignment,
 )
 
 _OUTPUT_LIMIT = 1024 * 1024
@@ -59,30 +59,30 @@ def default_coreme_cmd() -> list[str]:
     return [sys.executable, "-m", "coreme"]
 
 
-def build_run_argv(assignment: Assignment, *, coreme_cmd: list[str] | None = None) -> list[str]:
-    argv = [*(coreme_cmd or default_coreme_cmd()), "--plain", "run", assignment.release_path]
-    for key, value in sorted(assignment.inputs.items()):
+def build_run_argv(request: RunRequest, *, coreme_cmd: list[str] | None = None) -> list[str]:
+    argv = [*(coreme_cmd or default_coreme_cmd()), "--plain", "run", request.release_path]
+    for key, value in sorted(request.inputs.items()):
         argv.extend(["--input", f"{key}={value}"])
     return argv
 
 
 def execute_assignment(
-    assignment: Assignment,
+    request: RunRequest,
     *,
     workspace: str | Path | None = None,
     coreme_cmd: list[str] | None = None,
     env: dict[str, str] | None = None,
     timeout_sec: float | None = None,
 ) -> ExecResult:
-    argv = build_run_argv(assignment, coreme_cmd=coreme_cmd)
+    argv = build_run_argv(request, coreme_cmd=coreme_cmd)
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
-    run_env.update(COREME_PLAIN="1", COREME_ASSIGNMENT_ID=assignment.id)
-    if assignment.batch_id:
-        run_env["COREME_BATCH_ID"] = assignment.batch_id
-    if assignment.attempt_id:
-        run_env["COREME_ATTEMPT_ID"] = assignment.attempt_id
+    run_env.update(COREME_PLAIN="1", COREME_ASSIGNMENT_ID=request.id)
+    if request.batch_id:
+        run_env["COREME_BATCH_ID"] = request.batch_id
+    if request.attempt_id:
+        run_env["COREME_ATTEMPT_ID"] = request.attempt_id
 
     read_fd, write_fd = os.pipe()
     os.set_inheritable(write_fd, True)

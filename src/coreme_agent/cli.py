@@ -9,7 +9,8 @@ import sys
 
 from coreme_agent import __version__
 from coreme_agent.hub import HubClient, HubClientError
-from coreme_agent.hub_worker import drain_hub, process_one_hub
+from coreme_agent.hub_worker import drain as drain_hub
+from coreme_agent.hub_worker import process_one as process_one_hub
 from coreme_agent.store import (
     LocalQueue,
     QueueError,

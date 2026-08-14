@@ -9,7 +9,7 @@ from helpers import write_job
 
 from coreme.ship import hash_job_tree
 from coreme_agent.cache import ReleasePullError, resolve_release, zip_tree
-from coreme_agent.hub import HubClientError
+from coreme_agent.hub import CompletePayload, HubClientError
 from coreme_agent.outbox import flush_item, flush_outbox, load_pending, write_outbox
 
 
@@ -74,7 +74,7 @@ def test_outbox_replays_after_complete_error(tmp_path: Path) -> None:
         tmp_path / "outbox",
         assignment_id="a1",
         attempt_id="t1",
-        complete={"status": "failed", "exit_code": 1, "summary": {"status": "failed"}},
+        complete=CompletePayload(status="failed", exit_code=1, summary={"status": "failed"}),
         evidence=b"PK\x03\x04fake",
     )
     with pytest.raises(HubClientError):
@@ -96,7 +96,7 @@ def test_outbox_drops_stale_attempt(tmp_path: Path) -> None:
         tmp_path / "outbox",
         assignment_id="a1",
         attempt_id="t1",
-        complete={"status": "succeeded", "exit_code": 0},
+        complete=CompletePayload(status="succeeded", exit_code=0),
     )
     flush_outbox(_Stale(), tmp_path / "outbox")  # type: ignore[arg-type]
     assert load_pending(tmp_path / "outbox") == []

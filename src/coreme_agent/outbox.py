@@ -5,16 +5,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from coreme_agent.hub import HubClient, HubClientError
+from coreme_agent.hub import CompletePayload, HubClient, HubClientError
 
 
 @dataclass
 class OutboxItem:
     attempt_id: str
     assignment_id: str
-    complete: dict[str, Any]
+    complete: CompletePayload
     complete_sent: bool
     evidence_path: Path | None
     root: Path
@@ -29,7 +28,7 @@ def write_outbox(
     *,
     assignment_id: str,
     attempt_id: str,
-    complete: dict[str, Any],
+    complete: CompletePayload,
     evidence: bytes | None = None,
 ) -> OutboxItem:
     root = item_dir(outbox_root, attempt_id)
@@ -41,7 +40,7 @@ def write_outbox(
     payload = {
         "assignment_id": assignment_id,
         "attempt_id": attempt_id,
-        "complete": complete,
+        "complete": complete.to_dict(),
         "complete_sent": False,
         "has_evidence": ev_path is not None,
     }
@@ -71,7 +70,7 @@ def load_pending(outbox_root: str | Path) -> list[OutboxItem]:
             OutboxItem(
                 attempt_id=str(raw["attempt_id"]),
                 assignment_id=str(raw["assignment_id"]),
-                complete=dict(raw["complete"]),
+                complete=CompletePayload.from_dict(dict(raw["complete"])),
                 complete_sent=bool(raw.get("complete_sent")),
                 evidence_path=ev if ev.is_file() else None,
                 root=child,
@@ -106,7 +105,12 @@ def flush_item(client: HubClient, item: OutboxItem) -> None:
             client.complete(
                 item.assignment_id,
                 attempt_id=item.attempt_id,
-                **item.complete,
+                status=item.complete.status,
+                run_id=item.complete.run_id,
+                exit_code=item.complete.exit_code,
+                summary=item.complete.summary,
+                fail=item.complete.fail,
+                log_tail=item.complete.log_tail,
             )
             mark_complete_sent(item)
         if item.evidence_path is not None:

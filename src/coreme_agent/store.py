@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from coreme_agent.run import RunOutcome, RunRequest
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -154,7 +156,7 @@ class LocalQueue:
             batch_id=batch_id,
         )
 
-    def claim_next(self) -> Assignment | None:
+    def claim_next(self) -> RunRequest | None:
         """Atomically claim the oldest pending assignment."""
         self._conn.execute("BEGIN IMMEDIATE")
         try:
@@ -191,7 +193,16 @@ class LocalQueue:
         except Exception:
             self._conn.execute("ROLLBACK")
             raise
-        return self.get(row["id"])
+        claimed = self.get(row["id"])
+        if claimed is None:
+            return None
+        return RunRequest(
+            id=claimed.id,
+            release_path=claimed.release_path,
+            inputs=claimed.inputs,
+            batch_id=claimed.batch_id,
+            attempt_id=claimed.attempt_id,
+        )
 
     def complete(
         self,
@@ -201,7 +212,7 @@ class LocalQueue:
         exit_code: int | None = None,
         run_path: str | None = None,
         message: str | None = None,
-    ) -> Assignment:
+    ) -> RunOutcome:
         if status not in TERMINAL:
             raise QueueError(f"complete status must be terminal, got {status!r}")
         now = _utc_now()
@@ -257,7 +268,18 @@ class LocalQueue:
         except Exception:
             self._conn.execute("ROLLBACK")
             raise
-        return self.get(assignment_id)  # type: ignore[return-value]
+        done = self.get(assignment_id)
+        if done is None:
+            raise QueueError(f"unknown assignment: {assignment_id}")
+        return RunOutcome(
+            id=done.id,
+            status=done.status,
+            exit_code=done.exit_code,
+            run_path=done.run_path,
+            message=done.message,
+            attempt_id=done.attempt_id,
+            batch_id=done.batch_id,
+        )
 
     def get(self, assignment_id: str) -> Assignment | None:
         row = self._conn.execute(

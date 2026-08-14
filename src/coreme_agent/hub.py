@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
-from coreme_agent.store import Assignment
-
 
 class HubClientError(Exception):
     def __init__(self, status: int, message: str) -> None:
@@ -30,15 +28,37 @@ class ClaimedWork:
     lease_seconds: int
     attempt_id: str
 
-    def as_assignment(self, release_path: str) -> Assignment:
-        return Assignment(
-            id=self.id,
-            release_path=release_path,
-            inputs=self.inputs,
-            status="running",
-            created_at="",
-            batch_id=self.batch_id,
-            attempt_id=self.attempt_id,
+
+@dataclass(frozen=True)
+class CompletePayload:
+    status: str
+    run_id: str | None = None
+    exit_code: int | None = None
+    summary: dict[str, Any] | None = None
+    fail: dict[str, Any] | None = None
+    log_tail: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "run_id": self.run_id,
+            "exit_code": self.exit_code,
+            "summary": self.summary,
+            "fail": self.fail,
+            "log_tail": self.log_tail,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> CompletePayload:
+        summary = raw.get("summary")
+        fail = raw.get("fail")
+        return cls(
+            status=str(raw["status"]),
+            run_id=str(raw["run_id"]) if raw.get("run_id") is not None else None,
+            exit_code=int(raw["exit_code"]) if raw.get("exit_code") is not None else None,
+            summary=dict(summary) if isinstance(summary, dict) else None,
+            fail=dict(fail) if isinstance(fail, dict) else None,
+            log_tail=str(raw["log_tail"]) if raw.get("log_tail") is not None else None,
         )
 
 

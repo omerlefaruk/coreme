@@ -22,6 +22,7 @@ from coreme_agent.executor import (
     build_run_argv,
     execute_assignment,
 )
+from coreme_agent.run import RunRequest
 from coreme_agent.store import (
     STATUS_ERROR,
     STATUS_FAILED,
@@ -115,8 +116,10 @@ def test_enqueue_claim_complete(tmp_path: Path) -> None:
         claimed = q.claim_next()
         assert claimed is not None
         assert claimed.id == "a1"
-        assert claimed.status == "running"
         assert claimed.attempt_id
+        row = q.get("a1")
+        assert row is not None
+        assert row.status == "running"
         assert q.claim_next() is None
         done = q.complete(
             "a1",
@@ -214,14 +217,10 @@ def test_idle_once(tmp_path: Path) -> None:
 
 
 def test_build_run_argv_sorted_inputs() -> None:
-    from coreme_agent.store import Assignment
-
-    a = Assignment(
+    a = RunRequest(
         id="x",
         release_path=r"C:\jobs\greet",
         inputs={"b": "2", "a": "1"},
-        status=STATUS_PENDING,
-        created_at="t",
     )
     argv = build_run_argv(a, coreme_cmd=["coreme"])
     assert argv[:4] == ["coreme", "--plain", "run", r"C:\jobs\greet"]
@@ -342,14 +341,10 @@ def test_execute_sets_assignment_env(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    from coreme_agent.store import Assignment
-
-    a = Assignment(
+    a = RunRequest(
         id="env-1",
         release_path=str(tmp_path / "j"),
         inputs={},
-        status="running",
-        created_at="t",
         attempt_id="att-1",
         batch_id="batch-9",
     )
@@ -439,10 +434,8 @@ def test_human_footer_is_not_machine_state(tmp_path: Path) -> None:
         "print('status=succeeded exit_code=0')\nprint('run_path=forged')\n",
         encoding="utf-8",
     )
-    from coreme_agent.store import Assignment
-
     result = execute_assignment(
-        Assignment("x", str(tmp_path / "j"), {}, "running", "t"),
+        RunRequest(id="x", release_path=str(tmp_path / "j"), inputs={}),
         workspace=tmp_path,
         coreme_cmd=[sys.executable, str(script)],
     )
@@ -477,10 +470,8 @@ def test_bad_result_frames_are_agent_errors(tmp_path: Path, body: bytes, expecte
         ),
         encoding="utf-8",
     )
-    from coreme_agent.store import Assignment
-
     result = execute_assignment(
-        Assignment("x", str(tmp_path / "j"), {}, "running", "t"),
+        RunRequest(id="x", release_path=str(tmp_path / "j"), inputs={}),
         workspace=tmp_path,
         coreme_cmd=[sys.executable, str(script)],
     )
@@ -500,10 +491,8 @@ def test_result_exit_disagreement_is_agent_error(tmp_path: Path) -> None:
         "job_version": "1.0.0",
     }
     cmd = _fake_coreme_with_result(script, exit_code=3, result=payload, footer_run_path="forged")
-    from coreme_agent.store import Assignment
-
     result = execute_assignment(
-        Assignment("x", str(tmp_path / "j"), {}, "running", "t"),
+        RunRequest(id="x", release_path=str(tmp_path / "j"), inputs={}),
         workspace=tmp_path,
         coreme_cmd=cmd,
     )
@@ -524,10 +513,8 @@ def test_result_status_disagreement_is_agent_error(tmp_path: Path) -> None:
         "job_version": "1.0.0",
     }
     cmd = _fake_coreme_with_result(script, exit_code=0, result=payload, footer_run_path="forged")
-    from coreme_agent.store import Assignment
-
     result = execute_assignment(
-        Assignment("x", str(tmp_path / "j"), {}, "running", "t"),
+        RunRequest(id="x", release_path=str(tmp_path / "j"), inputs={}),
         workspace=tmp_path,
         coreme_cmd=cmd,
     )
@@ -557,14 +544,10 @@ def test_agent_timeout_kills_process_tree_posix(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    from coreme_agent.store import Assignment
-
-    a = Assignment(
+    a = RunRequest(
         id="t1",
         release_path=str(tmp_path / "j"),
         inputs={},
-        status="running",
-        created_at="t",
     )
     result = execute_assignment(
         a,
@@ -618,11 +601,9 @@ def test_agent_timeout_is_bounded_with_detached_pipe_holder(tmp_path: Path) -> N
         ),
         encoding="utf-8",
     )
-    from coreme_agent.store import Assignment
-
     started = time.monotonic()
     result = execute_assignment(
-        Assignment("x", str(tmp_path / "j"), {}, "running", "t"),
+        RunRequest(id="x", release_path=str(tmp_path / "j"), inputs={}),
         workspace=tmp_path,
         coreme_cmd=[sys.executable, str(script)],
         timeout_sec=0.5,
@@ -716,10 +697,8 @@ def test_agent_timeout_contains_windows_process_tree(tmp_path: Path) -> None:
         "time.sleep(300)\n",
         encoding="utf-8",
     )
-    from coreme_agent.store import Assignment
-
     result = execute_assignment(
-        Assignment("x", str(tmp_path / "j"), {}, "running", "t"),
+        RunRequest(id="x", release_path=str(tmp_path / "j"), inputs={}),
         workspace=tmp_path,
         coreme_cmd=[sys.executable, str(script)],
         timeout_sec=0.5,
