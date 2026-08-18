@@ -277,7 +277,7 @@ def test_stale_attempt_cannot_put_evidence_after_reclaim(
             machine_id="m1",
             payload=b"PK\x03\x04fake",
         )
-        assert row["evidence_bytes"] == 12
+        assert row["evidence_bytes"] == 8
 
 
 def test_enqueue_uses_catalog(pg_dsn: str, schema: str) -> None:
