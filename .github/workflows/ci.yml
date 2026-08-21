@@ -7,6 +7,20 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      COREME_TEST_PG_DSN: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -17,3 +31,25 @@ jobs:
       - run: python -m ruff format --check src tests
       - run: python -m mypy src
       - run: python -m pytest -q
+
+  smoke:
+    # Simulates a pipx user: build the wheel, install ONLY it (plus its
+    # declared dependencies) into a fresh venv, and exercise all three
+    # entry points end to end with no repo checkout on sys.path.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install build
+      - run: python -m build --wheel
+      - name: Install only the wheel into a fresh venv
+        run: |
+          python -m venv .smoke-venv
+          . .smoke-venv/bin/activate
+          # [hub] extra so coreme-hub imports psycopg; rich/psycopg come from
+          # PyPI as declared dependencies, coreme itself from dist/ only.
+          pip install --find-links dist "coreme[hub]"
+          pip show coreme
+      - run: bash scripts/smoke.sh

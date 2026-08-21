@@ -1,0 +1,43 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+      # PyPI publish via trusted publishing — enable when ready:
+      #   1. On PyPI, add a pending publisher for this project
+      #      (project -> publishing -> GitHub Actions; workflow name
+      #      "release.yml", environment left empty).
+      #   2. Uncomment the step below. It uploads everything in dist/.
+      # - uses: pypa/gh-action-pypi-publish@release/v1

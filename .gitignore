@@ -17,3 +17,5 @@ build/
 .coreme-agent/
 coreme-hub-data/
 .tmp-pg/
+
+deploy/.env

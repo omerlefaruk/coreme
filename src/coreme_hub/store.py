@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import re
+import secrets
+import shutil
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -16,6 +20,7 @@ from coreme.release import ReleaseError, tree_hash
 from coreme.ship import verify_release
 from coreme_hub.blobs import (
     parse_hash,
+    read_blob,
     read_evidence_zip,
     remove_tree,
     sha256_bytes,
@@ -73,6 +78,107 @@ def heartbeat(
     if row is None:
         raise StoreError("forbidden", "machine token does not match")
     return row
+
+
+def create_enroll_token(
+    conn: Connection[dict[str, Any]],
+    *,
+    tags: list[str] | None = None,
+    ttl_hours: float = 1.0,
+) -> dict[str, Any]:
+    """Mint a one-time enroll token. The plain token is returned exactly once."""
+    if ttl_hours <= 0:
+        raise StoreError("bad_request", "ttl_hours must be > 0")
+    token = secrets.token_urlsafe(32)
+    row = conn.execute(
+        """
+        INSERT INTO enroll_tokens (token_hash, tags, expires_at)
+        VALUES (%s, %s, now() + make_interval(secs => %s))
+        RETURNING *
+        """,
+        (hash_token(token), list(tags or []), ttl_hours * 3600),
+    ).fetchone()
+    assert row is not None
+    return {**row, "token": token}
+
+
+def redeem_enroll_token(
+    conn: Connection[dict[str, Any]],
+    *,
+    token: str,
+    tags: list[str] | None = None,
+    agent_version: str | None = None,
+) -> dict[str, Any]:
+    """Exchange a valid unused token for machine credentials (one transaction).
+
+    Creates the machine row with a fresh machine token and marks the token
+    used. Unknown or expired tokens raise ``unauthorized``; reused raise
+    ``conflict``.
+    """
+    row = conn.execute(
+        "SELECT * FROM enroll_tokens WHERE token_hash = %s FOR UPDATE",
+        (hash_token(token),),
+    ).fetchone()
+    if row is None:
+        raise StoreError("unauthorized", "unknown enroll token")
+    if row["used_at"] is not None:
+        raise StoreError("conflict", "enroll token already used")
+    expires_at = row["expires_at"]
+    if isinstance(expires_at, datetime) and expires_at <= datetime.now(UTC):
+        raise StoreError("unauthorized", "enroll token expired")
+    machine_id = str(uuid.uuid4())
+    machine_token = secrets.token_urlsafe(32)
+    conn.execute(
+        """
+        INSERT INTO machines (id, token_hash, tags, status, agent_version, last_heartbeat)
+        VALUES (%s, %s, %s, 'idle', %s, now())
+        """,
+        (
+            machine_id,
+            hash_token(machine_token),
+            list(tags) if tags else list(row["tags"] or []),
+            agent_version,
+        ),
+    )
+    conn.execute(
+        "UPDATE enroll_tokens SET used_at = now(), used_by = %s WHERE id = %s",
+        (machine_id, row["id"]),
+    )
+    return {
+        "machine_id": machine_id,
+        "machine_token": machine_token,
+        "tags": list(tags) if tags else list(row["tags"] or []),
+    }
+
+
+def list_enroll_tokens(conn: Connection[dict[str, Any]]) -> list[dict[str, Any]]:
+    return list(conn.execute("SELECT * FROM enroll_tokens ORDER BY expires_at").fetchall())
+
+
+def revoke_enroll_token(conn: Connection[dict[str, Any]], token_id: str) -> dict[str, Any]:
+    try:
+        ident = uuid.UUID(str(token_id))
+    except ValueError as exc:
+        raise StoreError("bad_request", f"invalid enroll token id {token_id!r}") from exc
+    row = conn.execute(
+        "DELETE FROM enroll_tokens WHERE id = %s RETURNING *",
+        (ident,),
+    ).fetchone()
+    if row is None:
+        raise StoreError("not_found", "unknown enroll token")
+    return row
+
+
+def enroll_token_public(row: dict[str, Any]) -> dict[str, Any]:
+    """JSON body for CLI listing (never the plain token)."""
+    used_by = row.get("used_by")
+    return {
+        "id": str(row["id"]),
+        "tags": list(row["tags"] or []),
+        "expires_at": _iso(row.get("expires_at")),
+        "used_at": _iso(row.get("used_at")),
+        "used_by": str(used_by) if used_by else None,
+    }
 
 
 def create_assignment(
@@ -180,6 +286,8 @@ def claim(
     ).fetchone()
     if machine is None:
         raise StoreError("forbidden", "unknown machine; heartbeat first")
+    if machine["drained"]:
+        return None
     tags = list(machine["tags"] or [])
     picked = conn.execute(
         """
@@ -702,6 +810,7 @@ def assignment_public(
         "exit_code": row.get("exit_code"),
         "summary": row.get("summary"),
         "fail": row.get("fail"),
+        "log_tail": row.get("log_tail"),
         "evidence": index,
         "created_at": _iso(row.get("created_at")),
         "finished_at": _iso(row.get("finished_at")),
@@ -739,7 +848,304 @@ def machine_public(row: dict[str, Any]) -> dict[str, Any]:
         "agent_version": row["agent_version"],
         "last_heartbeat": _iso(row.get("last_heartbeat")),
         "running_assignment_id": row["running_assignment_id"],
+        "drained": bool(row.get("drained")),
     }
+
+
+def set_machine_drained(
+    conn: Connection[dict[str, Any]],
+    *,
+    machine_id: str,
+    drained: bool,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "UPDATE machines SET drained = %s WHERE id = %s RETURNING *",
+        (drained, machine_id),
+    ).fetchone()
+    return row
+
+
+def create_schedule(
+    conn: Connection[dict[str, Any]],
+    *,
+    name: str,
+    release_name: str,
+    release_version: str = "0.0.0",
+    inputs: dict[str, str] | None = None,
+    secret_names: list[str] | None = None,
+    required_tags: list[str] | None = None,
+    lease_seconds: int = 900,
+    interval_seconds: int | None = None,
+    daily_utc: str | None = None,
+) -> dict[str, Any]:
+    """Create a schedule. Timing is interval_seconds OR daily_utc (HH:MM UTC)."""
+    if not name:
+        raise StoreError("bad_request", "schedule name is required")
+    if interval_seconds is None and daily_utc is None:
+        raise StoreError("bad_request", "schedule needs --interval-sec or --daily-utc")
+    if interval_seconds is not None and interval_seconds <= 0:
+        raise StoreError("bad_request", "interval_seconds must be > 0")
+    if daily_utc is not None and not re.fullmatch(r"\d{2}:\d{2}", daily_utc):
+        raise StoreError("bad_request", "daily_utc must be HH:MM")
+    row = conn.execute(
+        """
+        INSERT INTO schedules (name, release_name, release_version, inputs,
+                               secret_names, required_tags, lease_seconds,
+                               interval_seconds, daily_utc)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING *
+        """,
+        (
+            name,
+            release_name,
+            release_version,
+            json.dumps(inputs or {}),
+            list(secret_names or []),
+            list(required_tags or []),
+            lease_seconds,
+            interval_seconds,
+            daily_utc,
+        ),
+    ).fetchone()
+    assert row is not None
+    return row
+
+
+def list_schedules(conn: Connection[dict[str, Any]]) -> list[dict[str, Any]]:
+    return list(conn.execute("SELECT * FROM schedules ORDER BY name").fetchall())
+
+
+def get_schedule(conn: Connection[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    return conn.execute("SELECT * FROM schedules WHERE name = %s", (name,)).fetchone()
+
+
+def set_schedule_enabled(
+    conn: Connection[dict[str, Any]], *, name: str, enabled: bool
+) -> dict[str, Any] | None:
+    return conn.execute(
+        "UPDATE schedules SET enabled = %s WHERE name = %s RETURNING *",
+        (enabled, name),
+    ).fetchone()
+
+
+def delete_schedule(conn: Connection[dict[str, Any]], *, name: str) -> dict[str, Any] | None:
+    return conn.execute("DELETE FROM schedules WHERE name = %s RETURNING *", (name,)).fetchone()
+
+
+def fire_due_schedules(conn: Connection[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Create one Assignment per due schedule; advance next_run_at. Caller commits."""
+    due = conn.execute(
+        """
+        SELECT * FROM schedules
+         WHERE enabled AND next_run_at <= now()
+         ORDER BY next_run_at
+         FOR UPDATE SKIP LOCKED
+        """
+    ).fetchall()
+    fired: list[dict[str, Any]] = []
+    for schedule in due:
+        batch_id = f"sched:{schedule['name']}:{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+        skipped: str | None = None
+        try:
+            row = enqueue(
+                conn,
+                name=str(schedule["release_name"]),
+                version=str(schedule["release_version"]),
+                inputs={str(k): str(v) for k, v in (schedule["inputs"] or {}).items()},
+                secret_names=list(schedule["secret_names"] or []),
+                required_tags=list(schedule["required_tags"] or []),
+                lease_seconds=int(schedule["lease_seconds"]),
+                batch_id=batch_id,
+            )
+            assignment_id = str(row["id"])
+        except StoreError as exc:
+            # Missing release etc.: still advance so a broken schedule cannot
+            # hot-loop; surface the skip to the caller.
+            assignment_id = ""
+            skipped = str(exc)
+        _advance_schedule(conn, schedule)
+        item: dict[str, Any] = {
+            "schedule": str(schedule["name"]),
+            "assignment_id": assignment_id,
+            "batch_id": batch_id,
+        }
+        if skipped:
+            item["skipped"] = skipped
+        fired.append(item)
+    return fired
+
+
+def _advance_schedule(conn: Connection[dict[str, Any]], schedule: dict[str, Any]) -> None:
+    base = datetime.now(UTC)
+    interval = schedule["interval_seconds"]
+    daily = schedule["daily_utc"]
+    if interval is not None:
+        next_run = base + timedelta(seconds=int(interval))
+    elif daily is not None:
+        hh, mm = str(daily).split(":")
+        candidate = base.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+        if candidate <= base:
+            candidate += timedelta(days=1)
+        next_run = candidate
+    else:
+        next_run = base + timedelta(seconds=900)
+    conn.execute(
+        "UPDATE schedules SET next_run_at = %s WHERE id = %s",
+        (next_run, schedule["id"]),
+    )
+
+
+def validate_schedule_template(
+    conn: Connection[dict[str, Any]],
+    *,
+    data_dir: Path,
+    release_name: str,
+    release_version: str,
+    inputs: dict[str, str],
+) -> None:
+    """Reject templates that could only produce failed Assignments.
+
+    Reads the release manifest from its stored blob and mirrors the kernel's
+    input rules: unknown keys are rejected; required inputs without defaults
+    must be present.
+    """
+    spec = resolve_release_spec(
+        conn,
+        name=release_name,
+        version=release_version or "0.0.0",
+        content_hash=None,
+        blob_url=None,
+        size_bytes=None,
+    )
+    digest = parse_hash(str(spec["content_hash"]))
+    blob = read_blob(Path(data_dir), digest)
+    manifest = _manifest_from_blob(blob, str(spec["name"]))
+    if manifest is None:
+        return
+    declared = set(manifest.inputs)
+    unknown = sorted(set(inputs) - declared)
+    if unknown:
+        raise StoreError(
+            "bad_request",
+            f"unknown inputs for {spec['name']}: {', '.join(unknown)}",
+        )
+    missing = sorted(
+        key
+        for key, item in manifest.inputs.items()
+        if key not in inputs and item.required and item.default is None
+    )
+    if missing:
+        raise StoreError(
+            "bad_request",
+            f"missing required inputs for {spec['name']}: {', '.join(missing)}",
+        )
+
+
+def _manifest_from_blob(blob: bytes, name: str):
+    """Load the manifest from a release blob; None when the Job has none."""
+    with tempfile.TemporaryDirectory() as tmp:
+        unzip_tree(blob, Path(tmp))
+        try:
+            return load_manifest(tmp)
+        except ManifestError as exc:
+            raise StoreError(
+                "bad_request", f"release {name} has an invalid manifest: {exc}"
+            ) from exc
+
+
+def schedule_public(row: dict[str, Any]) -> dict[str, Any]:
+    daily = row.get("daily_utc")
+    return {
+        "id": str(row["id"]),
+        "name": row["name"],
+        "release": {"name": row["release_name"], "version": row["release_version"]},
+        "inputs": row["inputs"] or {},
+        "secret_names": list(row["secret_names"] or []),
+        "required_tags": list(row["required_tags"] or []),
+        "lease_seconds": row["lease_seconds"],
+        "interval_seconds": row["interval_seconds"],
+        "daily_utc": str(daily) if daily is not None else None,
+        "enabled": bool(row["enabled"]),
+        "next_run_at": _iso(row.get("next_run_at")),
+    }
+
+
+def hub_stats(conn: Connection[dict[str, Any]]) -> dict[str, Any]:
+    machines = conn.execute(
+        """
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE last_heartbeat > now() - interval '2 minutes') AS online,
+               count(*) FILTER (WHERE drained) AS drained
+          FROM machines
+        """
+    ).fetchone()
+    by_status = conn.execute(
+        "SELECT status, count(*) AS n FROM assignments GROUP BY status"
+    ).fetchall()
+    attempts = conn.execute(
+        """
+        SELECT count(*) FILTER (WHERE status = 'failed') AS failed,
+               count(*) FILTER (WHERE status = 'succeeded') AS succeeded
+          FROM attempts
+        """
+    ).fetchone()
+    assert machines is not None and attempts is not None
+    return {
+        "machines_total": int(machines["total"]),
+        "machines_online": int(machines["online"]),
+        "machines_drained": int(machines["drained"]),
+        "assignments_by_status": {str(r["status"]): int(r["n"]) for r in by_status},
+        "attempts_failed": int(attempts["failed"]),
+        "attempts_succeeded": int(attempts["succeeded"]),
+    }
+
+
+def prune_old(
+    conn: Connection[dict[str, Any]],
+    *,
+    days: int,
+    data_dir: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Delete terminal assignments (and their attempts/evidence) older than days."""
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    rows = conn.execute(
+        """
+        SELECT id FROM assignments
+         WHERE finished_at IS NOT NULL AND finished_at < %s
+        """,
+        (cutoff,),
+    ).fetchall()
+    ids = [str(r["id"]) for r in rows]
+    counts = {"assignments": len(ids), "attempts": 0}
+    if not ids:
+        return counts
+    if dry_run:
+        counted = conn.execute(
+            "SELECT count(*) AS n FROM attempts WHERE assignment_id = ANY(%s)",
+            (ids,),
+        ).fetchone()
+        assert counted is not None
+        counts["attempts"] = int(counted["n"])
+        return counts
+    deleted = conn.execute(
+        "WITH gone AS (DELETE FROM attempts WHERE assignment_id = ANY(%s) RETURNING 1) "
+        "SELECT count(*) AS n FROM gone",
+        (ids,),
+    ).fetchone()
+    assert deleted is not None
+    counts["attempts"] = int(deleted["n"])
+    removed = conn.execute(
+        "WITH gone AS (DELETE FROM assignments WHERE id = ANY(%s) RETURNING 1) "
+        "SELECT count(*) AS n FROM gone",
+        (ids,),
+    ).fetchone()
+    assert removed is not None
+    counts["assignments"] = int(removed["n"])
+    if data_dir is not None:
+        for assignment_id in ids:
+            shutil.rmtree(Path(data_dir) / "evidence" / assignment_id, ignore_errors=True)
+    return counts
 
 
 def _identity(root: Path, name: str | None, version: str | None) -> tuple[str, str]:

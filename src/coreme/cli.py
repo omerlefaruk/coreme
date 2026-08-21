@@ -10,6 +10,7 @@ from pathlib import Path
 from coreme import __version__
 from coreme._process import ProcessError
 from coreme.brief import BriefError, assemble_brief
+from coreme.doctor import render_json, render_plain, run_doctor
 from coreme.events import events_path, read_events, read_fail_summary
 from coreme.init import InitError, init_job
 from coreme.inputs import InputError, SecretError
@@ -217,6 +218,28 @@ def build_parser() -> argparse.ArgumentParser:
         dest="do_exec",
         help="After staging, run the suggested coreme run via subprocess",
     )
+
+    doctor_parser = commands.add_parser(
+        "doctor",
+        help="Self-check this machine (python, deps, workspace, hub)",
+    )
+    doctor_parser.add_argument(
+        "--hub",
+        default=None,
+        metavar="URL",
+        help="Also check hub reachability (GET /healthz)",
+    )
+    doctor_parser.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace to check (default: cwd)",
+    )
+    doctor_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Machine-readable JSON output",
+    )
     return parser
 
 
@@ -248,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_repair(args, plain_flag=plain)
         if args.command == "seed-from-fail":
             return _cmd_seed_from_fail(args, plain_flag=plain)
+        if args.command == "doctor":
+            return _cmd_doctor(args)
     except (
         ManifestError,
         InputError,
@@ -436,3 +461,13 @@ def _parse_cli_inputs(items: list[str]) -> list[tuple[str, str]]:
             raise InputError(f"--input key must not be empty: {item}")
         pairs.append((name, value))
     return pairs
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    checks = run_doctor(hub_url=args.hub, workspace=args.workspace)
+    if args.as_json:
+        print(render_json(checks))
+    else:
+        print(render_plain(checks))
+    ok = all(check.status != "fail" for check in checks)
+    return 0 if ok else 1

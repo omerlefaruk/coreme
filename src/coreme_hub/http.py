@@ -5,32 +5,48 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import threading
+import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from coreme_hub import __version__
 from coreme_hub.blobs import ensure_data_dir, parse_hash, read_blob
-from coreme_hub.db import STORE_STATUS, HubError, StoreError, connect, hash_token
+from coreme_hub.db import STORE_STATUS, HubError, Pool, StoreError, hash_token
 from coreme_hub.store import (
+    STATUS_FAILED,
     assignment_public,
     claim,
     complete,
+    create_schedule,
     enqueue,
     evidence_index,
+    fire_due_schedules,
     get_assignment,
     get_evidence_bytes,
     heartbeat,
+    hub_stats,
     latest_evidence,
     list_assignments,
     list_machines,
+    list_schedules,
     machine_public,
     put_evidence,
+    redeem_enroll_token,
     register_zip,
     release_public,
     renew,
+    schedule_public,
     upsert_release,
+    validate_schedule_template,
 )
+
+
+class TextResponse(bytes):
+    """Body sent as text/plain (Prometheus metrics)."""
 
 
 def parse_bind(bind: str) -> tuple[str, int]:
@@ -60,6 +76,12 @@ class HubContext:
         self.data_dir = ensure_data_dir(
             data_dir or os.environ.get("COREME_HUB_DATA") or "coreme-hub-data"
         )
+        self.max_body = int(os.environ.get("COREME_HUB_MAX_BODY_MB") or 200) * 1_000_000
+        self.webhook_url = os.environ.get("COREME_HUB_WEBHOOK_URL") or None
+        self.pool = Pool(dsn, schema)
+
+    def conn(self):
+        return self.pool.connection()
 
 
 def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
@@ -95,7 +117,10 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
                 self._send(500, {"error": str(exc)})
                 return
             if isinstance(body, bytes):
-                self._send_bytes(status, body)
+                if isinstance(body, TextResponse):
+                    self._send_text(status, body)
+                else:
+                    self._send_bytes(status, body)
                 return
             self._send(status, body)
 
@@ -105,9 +130,38 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
             parts: list[str],
             query: dict[str, str],
         ) -> tuple[int, dict[str, Any] | list[Any] | bytes | None]:
+            if method == "GET" and parts == ["healthz"]:
+                return 200, {"status": "ok"}
+            if method == "GET" and parts == ["readyz"]:
+                with ctx.conn() as conn:
+                    conn.execute("SELECT 1")
+                return 200, {"status": "ready"}
+            if method == "GET" and parts == ["version"]:
+                return 200, {"version": __version__}
+            if method == "GET" and parts == ["metrics"]:
+                with ctx.conn() as conn:
+                    stats = hub_stats(conn)
+                return 200, TextResponse(_metrics_text(stats))
+
             if parts[:1] != ["v1"]:
                 raise HubError(404, "not found")
             tail = parts[1:]
+
+            if method == "POST" and tail == ["machines", "enroll"]:
+                # No bearer auth: the enroll token itself is the credential.
+                body = self._json()
+                token = str(body.get("enroll_token") or "")
+                if not token:
+                    raise HubError(401, "enroll_token is required")
+                with ctx.conn() as conn:
+                    result = redeem_enroll_token(
+                        conn,
+                        token=token,
+                        tags=parse_tags(_as_str_list(body.get("tags"))),
+                        agent_version=_opt_str(body.get("agent_version")),
+                    )
+                    conn.commit()
+                return 200, result
 
             if method == "POST" and tail == ["machines", "heartbeat"]:
                 if self._is_ops():
@@ -120,7 +174,7 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
                 if machine is not None and machine["id"] != machine_id:
                     raise HubError(403, "token belongs to a different machine")
                 token = self._bearer()
-                with connect(ctx.dsn, ctx.schema) as conn:
+                with ctx.conn() as conn:
                     heartbeat(
                         conn,
                         machine_id=machine_id,
@@ -135,7 +189,7 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
 
             if method == "POST" and tail == ["assignments", "claim"]:
                 machine = self._require_machine()
-                with connect(ctx.dsn, ctx.schema) as conn:
+                with ctx.conn() as conn:
                     claimed = claim(conn, machine_id=machine["id"])
                     conn.commit()
                 if claimed is None:
@@ -147,7 +201,7 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
                 machine = self._require_machine()
                 if action == "renew":
                     body = self._json()
-                    with connect(ctx.dsn, ctx.schema) as conn:
+                    with ctx.conn() as conn:
                         row = renew(
                             conn,
                             assignment_id=assignment_id,
@@ -158,7 +212,7 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
                     return 200, assignment_public(row)
                 if action == "complete":
                     body = self._json()
-                    with connect(ctx.dsn, ctx.schema) as conn:
+                    with ctx.conn() as conn:
                         row = complete(
                             conn,
                             assignment_id=assignment_id,
@@ -172,12 +226,14 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
                             log_tail=_opt_str(body.get("log_tail")),
                         )
                         conn.commit()
+                    if row["status"] == STATUS_FAILED and ctx.webhook_url:
+                        _notify_fail(ctx.webhook_url, assignment_public(row))
                     return 200, assignment_public(row)
                 if action == "evidence":
                     payload = self._raw()
                     attempt_id = query.get("attempt_id") or ""
                     if method == "POST":
-                        with connect(ctx.dsn, ctx.schema) as conn:
+                        with ctx.conn() as conn:
                             row = put_evidence(
                                 conn,
                                 data_dir=ctx.data_dir,
@@ -198,7 +254,7 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
                 and tail[2] == "evidence"
             ):
                 self._require_ops()
-                with connect(ctx.dsn, ctx.schema) as conn:
+                with ctx.conn() as conn:
                     _attempt, payload = get_evidence_bytes(
                         conn,
                         data_dir=ctx.data_dir,
@@ -213,7 +269,7 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
                 release = body.get("release")
                 if not isinstance(release, dict):
                     raise HubError(400, "release object is required")
-                with connect(ctx.dsn, ctx.schema) as conn:
+                with ctx.conn() as conn:
                     row = enqueue(
                         conn,
                         name=_opt_str(release.get("name")),
@@ -231,12 +287,49 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
                     conn.commit()
                 return 200, assignment_public(row)
 
+            if method == "POST" and tail == ["schedules"]:
+                self._require_ops()
+                body = self._json()
+                release = body.get("release")
+                if not isinstance(release, dict):
+                    raise HubError(400, "release object is required")
+                name = str(body.get("name") or "")
+                inputs = _str_dict(body.get("inputs"))
+                with ctx.conn() as conn:
+                    validate_schedule_template(
+                        conn,
+                        data_dir=Path(ctx.data_dir),
+                        release_name=str(release.get("name") or ""),
+                        release_version=str(release.get("version") or "0.0.0"),
+                        inputs=inputs,
+                    )
+                    row = create_schedule(
+                        conn,
+                        name=name,
+                        release_name=str(release.get("name") or ""),
+                        release_version=str(release.get("version") or "0.0.0"),
+                        inputs=inputs,
+                        secret_names=parse_tags(_as_str_list(body.get("secret_names"))),
+                        required_tags=parse_tags(_as_str_list(body.get("required_tags"))),
+                        lease_seconds=int(body.get("lease_seconds") or 900),
+                        interval_seconds=_opt_int(body.get("interval_seconds")),
+                        daily_utc=_opt_str(body.get("daily_utc")),
+                    )
+                    conn.commit()
+                return 200, schedule_public(row)
+
+            if method == "GET" and tail == ["schedules"]:
+                self._require_ops()
+                with ctx.conn() as conn:
+                    rows = [schedule_public(s) for s in list_schedules(conn)]
+                return 200, rows
+
             if method == "POST" and tail == ["releases"]:
                 self._require_ops()
                 ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
                 if ctype == "application/zip":
                     payload = self._raw()
-                    with connect(ctx.dsn, ctx.schema) as conn:
+                    with ctx.conn() as conn:
                         row = register_zip(
                             conn,
                             data_dir=ctx.data_dir,
@@ -247,7 +340,7 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
                         conn.commit()
                     return 200, release_public(row)
                 body = self._json()
-                with connect(ctx.dsn, ctx.schema) as conn:
+                with ctx.conn() as conn:
                     row = upsert_release(
                         conn,
                         content_hash=str(body.get("content_hash") or ""),
@@ -267,13 +360,13 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
 
             if method == "GET" and tail == ["machines"]:
                 self._require_ops()
-                with connect(ctx.dsn, ctx.schema) as conn:
+                with ctx.conn() as conn:
                     rows = [machine_public(m) for m in list_machines(conn)]
                 return 200, rows
 
             if method == "GET" and tail == ["assignments"]:
                 self._require_ops()
-                with connect(ctx.dsn, ctx.schema) as conn:
+                with ctx.conn() as conn:
                     rows = [
                         assignment_public(a)
                         for a in list_assignments(
@@ -286,7 +379,7 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
 
             if method == "GET" and len(tail) == 2 and tail[0] == "assignments":
                 self._require_ops()
-                with connect(ctx.dsn, ctx.schema) as conn:
+                with ctx.conn() as conn:
                     found = get_assignment(conn, tail[1])
                     ev = latest_evidence(conn, tail[1]) if found is not None else None
                 if found is None:
@@ -297,6 +390,8 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
 
         def _raw(self) -> bytes:
             length = int(self.headers.get("Content-Length") or 0)
+            if length > ctx.max_body:
+                raise HubError(413, "request body too large")
             return self.rfile.read(length) if length else b""
 
         def _json(self) -> dict[str, Any]:
@@ -329,14 +424,14 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
             token = self._bearer()
             if token == ctx.ops_token:
                 return None
-            with connect(ctx.dsn, ctx.schema) as conn:
+            with ctx.conn() as conn:
                 return _machine_by_token(conn, token)
 
         def _require_machine(self) -> dict[str, Any]:
             token = self._bearer()
             if token == ctx.ops_token:
                 raise HubError(403, "machine token required")
-            with connect(ctx.dsn, ctx.schema) as conn:
+            with ctx.conn() as conn:
                 row = _machine_by_token(conn, token)
             if row is None:
                 raise HubError(401, "unknown machine token")
@@ -367,7 +462,63 @@ def make_handler(ctx: HubContext) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(payload)
 
+        def _send_text(self, status: int, payload: bytes) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
     return Handler
+
+
+def _metrics_text(stats: dict[str, Any]) -> bytes:
+    lines = [
+        f"coreme_machines_total {stats['machines_total']}",
+        f"coreme_machines_online {stats['machines_online']}",
+        f"coreme_machines_drained {stats['machines_drained']}",
+    ]
+    for status in ("pending", "claimed", "succeeded", "failed", "error", "timeout"):
+        count = stats["assignments_by_status"].get(status, 0)
+        lines.append(f'coreme_assignments{{status="{status}"}} {count}')
+    lines.append(f"coreme_attempts_failed_total {stats['attempts_failed']}")
+    lines.append(f"coreme_attempts_succeeded_total {stats['attempts_succeeded']}")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _notify_fail(url: str, payload: dict[str, Any]) -> None:
+    """Fire-and-forget webhook; notifications never break the run path."""
+
+    def post() -> None:
+        try:
+            data = json.dumps({"event": "assignment.failed", "assignment": payload}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=10).read()
+        except Exception:
+            return
+
+    threading.Thread(target=post, daemon=True).start()
+
+
+def _ticker(ctx: HubContext, tick_seconds: float) -> None:
+    while True:
+        time.sleep(tick_seconds)
+        try:
+            with ctx.conn() as conn:
+                fired = fire_due_schedules(conn)
+                conn.commit()
+            for item in fired:
+                if item.get("skipped"):
+                    print(f"schedule={item['schedule']} skipped={item['skipped']}")
+                else:
+                    print(f"schedule={item['schedule']} assignment_id={item['assignment_id']}")
+        except Exception as exc:
+            print(f"ticker error: {exc}")
 
 
 def serve(
@@ -377,11 +528,16 @@ def serve(
     ops_token: str | None = None,
     schema: str = "public",
     data_dir: str | Path | None = None,
+    tick_seconds: float | None = None,
 ) -> ThreadingHTTPServer:
     token = ops_token or os.environ.get("COREME_HUB_OPS_TOKEN") or ""
     ctx = HubContext(dsn, token, schema=schema, data_dir=data_dir)
     host, port = parse_bind(bind)
     httpd = ThreadingHTTPServer((host, port), make_handler(ctx))
+    if tick_seconds is None:
+        tick_seconds = float(os.environ.get("COREME_HUB_TICK_SECONDS") or 30)
+    if tick_seconds > 0:
+        threading.Thread(target=_ticker, args=(ctx, tick_seconds), daemon=True).start()
     return httpd
 
 

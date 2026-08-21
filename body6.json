@@ -1,0 +1,1 @@
+{"name":"api-made","release":{"name":"greet","version":"0.1.0"},"required_tags":["site=lab"],"inputs":{"name":"ViaAPI"},"interval_seconds":7200}

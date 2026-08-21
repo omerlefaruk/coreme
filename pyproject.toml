@@ -4,15 +4,32 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coreme"
-version = "0.1.0"
-description = "Durable local automation Job runner"
+dynamic = ["version"]
+description = "AI-friendly automation kernel: durable Jobs, fleet agent, thin hub"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [{ name = "coreme" }]
+keywords = ["automation", "agent", "job-runner", "fleet", "scheduler", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Automation",
+    "Intended Audience :: Developers",
+    "Environment :: Console",
+]
 dependencies = [
     "rich>=13",
 ]
+
+[project.urls]
+Homepage = "https://github.com/coreme/coreme"
+Repository = "https://github.com/coreme/coreme"
+Changelog = "https://github.com/coreme/coreme/blob/main/CHANGELOG.md"
+"Issue Tracker" = "https://github.com/coreme/coreme/issues"
 
 [project.optional-dependencies]
 hub = [
@@ -30,6 +47,9 @@ dev = [
 coreme = "coreme.cli:main"
 coreme-agent = "coreme_agent.cli:main"
 coreme-hub = "coreme_hub.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "coreme.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -6,6 +6,7 @@ import io
 import json
 import os
 import threading
+import urllib.error
 import urllib.request
 import uuid
 import zipfile
@@ -18,7 +19,7 @@ import pytest
 from helpers import make_repo, write_job
 
 from coreme_agent.cli import main as agent_main
-from coreme_agent.hub import HubClient
+from coreme_agent.hub import HubClient, HubClientError, enroll_machine
 from coreme_hub.blobs import hash_hex
 from coreme_hub.db import StoreError, connect, hash_token, migrate
 from coreme_hub.http import parse_bind, serve
@@ -30,12 +31,19 @@ from coreme_hub.store import (
     claim,
     complete,
     create_assignment,
+    create_enroll_token,
+    create_schedule,
     enqueue,
+    fire_due_schedules,
     get_assignment,
     heartbeat,
+    hub_stats,
     list_attempts,
+    prune_old,
     put_evidence,
     renew,
+    set_machine_drained,
+    set_schedule_enabled,
     upsert_release,
 )
 
@@ -638,3 +646,237 @@ def test_secret_values_stay_out_of_index(hub_url: str, tmp_path: Path) -> None:
     text = json.dumps(shown)
     assert secret not in text
     assert "API_KEY" in text
+
+
+def test_enroll_token_flow(hub_url: str, pg_dsn: str, schema: str) -> None:
+    with connect(pg_dsn, schema) as conn:
+        minted = create_enroll_token(conn, tags=["site=lab"], ttl_hours=1.0)
+        conn.commit()
+    token = str(minted["token"])
+
+    result = enroll_machine(hub_url, token, tags=["site=lab"], agent_version="test")
+    assert result.machine_id
+    assert result.machine_token
+    assert result.tags == ["site=lab"]
+
+    # The returned credentials are a fully working machine identity.
+    client = HubClient(hub_url, result.machine_token, result.machine_id)
+    client.heartbeat(tags=["site=lab"], status="idle", agent_version="test")
+
+    # A one-time token cannot be redeemed twice.
+    with pytest.raises(HubClientError) as exc:
+        enroll_machine(hub_url, token)
+    assert exc.value.status == 409
+
+    # Unknown tokens are rejected.
+    with pytest.raises(HubClientError) as exc_unknown:
+        enroll_machine(hub_url, "no-such-token")
+    assert exc_unknown.value.status == 401
+
+
+def test_health_ready_version_and_metrics(hub_url: str) -> None:
+    def _get(path: str) -> tuple[int, str]:
+        try:
+            with urllib.request.urlopen(hub_url + path, timeout=10) as resp:
+                return resp.status, resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode("utf-8")
+
+    status, body = _get("/healthz")
+    assert status == 200 and '"ok"' in body
+    status, body = _get("/readyz")
+    assert status == 200 and '"ready"' in body
+    status, body = _get("/version")
+    assert status == 200 and '"version"' in body
+    status, body = _get("/metrics")
+    assert status == 200
+    assert "coreme_machines_total 0" in body
+    assert "coreme_assignments" in body
+
+
+def test_drained_machine_does_not_claim(pg_dsn: str, schema: str) -> None:
+    with connect(pg_dsn, schema) as conn:
+        _register(conn, "m1", "tok-a", ["site=lab"])
+        _enqueue(conn, assignment_id="a-drain", required_tags=["site=lab"])
+        conn.commit()
+
+        row = set_machine_drained(conn, machine_id="m1", drained=True)
+        assert row is not None
+        conn.commit()
+        assert claim(conn, machine_id="m1") is None
+
+        set_machine_drained(conn, machine_id="m1", drained=False)
+        conn.commit()
+        claimed = claim(conn, machine_id="m1")
+        assert claimed is not None
+        conn.commit()
+
+
+def test_schedule_fires_then_advances(pg_dsn: str, schema: str) -> None:
+    with connect(pg_dsn, schema) as conn:
+        upsert_release(
+            conn,
+            content_hash=_DUMMY_HASH,
+            name="greet",
+            version="1.0.0",
+            blob_url=_DUMMY_BLOB,
+            size_bytes=1,
+        )
+        create_schedule(
+            conn,
+            name="nightly",
+            release_name="greet",
+            release_version="1.0.0",
+            interval_seconds=3600,
+            required_tags=["site=lab"],
+        )
+        conn.commit()
+
+        fired = fire_due_schedules(conn)
+        conn.commit()
+        assert len(fired) == 1
+        item = fired[0]
+        assert item["schedule"] == "nightly"
+        created = get_assignment(conn, str(item["assignment_id"]))
+        assert created is not None
+        assert str(created["batch_id"]).startswith("sched:nightly:")
+        assert created["status"] == STATUS_PENDING
+
+        # next_run_at advanced: an immediate second tick fires nothing.
+        assert fire_due_schedules(conn) == []
+        conn.commit()
+
+
+def test_disabled_schedule_does_not_fire(pg_dsn: str, schema: str) -> None:
+    with connect(pg_dsn, schema) as conn:
+        upsert_release(
+            conn,
+            content_hash=_DUMMY_HASH,
+            name="greet",
+            version="1.0.0",
+            blob_url=_DUMMY_BLOB,
+            size_bytes=1,
+        )
+        create_schedule(conn, name="off", release_name="greet", interval_seconds=60)
+        set_schedule_enabled(conn, name="off", enabled=False)
+        conn.commit()
+        assert fire_due_schedules(conn) == []
+        conn.commit()
+
+
+def test_prune_old_removes_terminal_assignments(pg_dsn: str, schema: str) -> None:
+    with connect(pg_dsn, schema) as conn:
+        _register(conn, "m1", "tok-a", [])
+        _enqueue(conn, assignment_id="a-old")
+        claimed = claim(conn, machine_id="m1")
+        assert claimed is not None
+        complete(
+            conn,
+            assignment_id="a-old",
+            machine_id="m1",
+            attempt_id=str(claimed["attempt_id"]),
+            status=STATUS_SUCCEEDED,
+            exit_code=0,
+        )
+        conn.execute(
+            "UPDATE assignments SET finished_at = now() - interval '10 days' WHERE id = 'a-old'"
+        )
+        _enqueue(conn, assignment_id="a-new")
+        fresh = claim(conn, machine_id="m1")
+        assert fresh is not None
+        complete(
+            conn,
+            assignment_id="a-new",
+            machine_id="m1",
+            attempt_id=str(fresh["attempt_id"]),
+            status=STATUS_SUCCEEDED,
+            exit_code=0,
+        )
+        conn.commit()
+
+        dry = prune_old(conn, days=5, dry_run=True)
+        assert dry["assignments"] == 1
+        assert dry["attempts"] >= 1
+
+        counts = prune_old(conn, days=5)
+        conn.commit()
+        assert counts["assignments"] == 1
+        assert counts["attempts"] >= 1
+        assert get_assignment(conn, "a-old") is None
+        assert get_assignment(conn, "a-new") is not None
+
+
+def test_hub_stats_counts(pg_dsn: str, schema: str) -> None:
+    with connect(pg_dsn, schema) as conn:
+        _register(conn, "m1", "tok-a", [])
+        _enqueue(conn, assignment_id="a-stats")
+        stats = hub_stats(conn)
+    assert stats["machines_total"] == 1
+    assert stats["assignments_by_status"].get(STATUS_PENDING) == 1
+
+
+def test_schedules_http_route_create_list_validate(hub_url: str, tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    job = write_job(
+        repo / "jobs" / "greetjob",
+        name="greetjob",
+        version="1.0.0",
+        inputs_toml='\n[inputs.name]\ntype = "string"\nrequired = true\n',
+    )
+    _register_job(hub_url, job)
+
+    def _post(path: str, body: dict) -> tuple[int, dict]:
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            hub_url + path,
+            data=data,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {OPS}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    good = {
+        "name": "nightly",
+        "release": {"name": "greetjob", "version": "1.0.0"},
+        "inputs": {"name": "Fleet"},
+        "required_tags": ["site=lab"],
+        "interval_seconds": 3600,
+    }
+    status, created = _post("/v1/schedules", good)
+    assert status == 200
+    assert created["name"] == "nightly"
+    assert created["release"]["name"] == "greetjob"
+    assert created["enabled"] is True
+    assert created["inputs"] == {"name": "Fleet"}
+
+    status, listed = _get_json(hub_url, "/v1/schedules")
+    assert status == 200
+    assert any(s["name"] == "nightly" for s in listed)
+
+    unknown = dict(good, name="bad-unknown", inputs={"nope": "x"})
+    status, err = _post("/v1/schedules", unknown)
+    assert status == 400 and "unknown inputs" in err["error"]
+
+    missing = dict(good, name="bad-missing", inputs={})
+    status, err = _post("/v1/schedules", missing)
+    assert status == 400 and "missing required inputs" in err["error"]
+
+    ghost = dict(good, name="bad-release", release={"name": "ghost", "version": "9.9.9"})
+    status, err = _post("/v1/schedules", ghost)
+    assert status == 404
+
+
+def _get_json(hub_url: str, path: str) -> tuple[int, object]:
+    req = urllib.request.Request(hub_url + path, headers={"Authorization": f"Bearer {OPS}"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))

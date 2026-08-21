@@ -62,6 +62,61 @@ class CompletePayload:
         )
 
 
+@dataclass(frozen=True)
+class EnrollResult:
+    machine_id: str
+    machine_token: str
+    tags: list[str]
+
+
+def enroll_machine(
+    base_url: str,
+    enroll_token: str,
+    *,
+    tags: list[str] | None = None,
+    agent_version: str | None = None,
+) -> EnrollResult:
+    """Exchange a one-time enroll token for machine credentials (no bearer)."""
+    data = json.dumps(
+        {
+            "enroll_token": enroll_token,
+            "tags": list(tags or []),
+            "agent_version": agent_version,
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/v1/machines/enroll",
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        message = raw
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and parsed.get("error"):
+                message = str(parsed["error"])
+        except json.JSONDecodeError:
+            pass
+        raise HubClientError(exc.code, message) from exc
+    if not isinstance(payload, dict):
+        raise HubClientError(500, "enroll did not return an object")
+    if not payload.get("machine_id") or not payload.get("machine_token"):
+        raise HubClientError(500, "enroll response is missing machine identity")
+    return EnrollResult(
+        machine_id=str(payload["machine_id"]),
+        machine_token=str(payload["machine_token"]),
+        tags=[str(t) for t in payload.get("tags") or []],
+    )
+
+
 class HubClient:
     def __init__(self, base_url: str, token: str, machine_id: str) -> None:
         self.base = base_url.rstrip("/")

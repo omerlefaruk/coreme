@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  hub:
+    build: ..
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # psycopg DSN inside the compose network.
+      COREME_HUB_DSN: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      COREME_HUB_OPS_TOKEN: ${COREME_HUB_OPS_TOKEN:?set in .env}
+      COREME_HUB_DATA: /data
+      COREME_HUB_BIND: 0.0.0.0:8787
+      COREME_HUB_TICK_SECONDS: "30"
+    volumes:
+      - hubdata:/data
+    expose:
+      - "8787"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - hub
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      HUB_DOMAIN: ${HUB_DOMAIN:?set in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  hubdata:
+  caddydata:

@@ -3,4 +3,4 @@
 Agent = developer. Job = program. Runner = dumb robot.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.5.1"

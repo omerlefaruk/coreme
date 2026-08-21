@@ -4,12 +4,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
+import shutil
+import signal
 import sys
+import threading
+from pathlib import Path
 
 from coreme_agent import __version__
-from coreme_agent.hub import HubClient, HubClientError
+from coreme_agent.config import (
+    AgentConfig,
+    ConfigError,
+    default_config_path,
+    split_csv,
+)
+from coreme_agent.config import (
+    load as load_config,
+)
+from coreme_agent.config import (
+    save as save_config,
+)
+from coreme_agent.daemon import Daemon, DaemonLocked, acquire_lock, release_lock, setup_logging
+from coreme_agent.hub import HubClient, HubClientError, enroll_machine
 from coreme_agent.hub_worker import drain as drain_hub
+from coreme_agent.hub_worker import execute_claimed
 from coreme_agent.hub_worker import process_one as process_one_hub
 from coreme_agent.store import (
     LocalQueue,
@@ -18,6 +37,8 @@ from coreme_agent.store import (
     parse_input_pairs,
 )
 from coreme_agent.worker import drain, process_one
+
+log = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -90,6 +111,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print JSON object",
     )
 
+    en = commands.add_parser(
+        "enroll",
+        help="Exchange a one-time enroll token for machine credentials",
+    )
+    en.add_argument("--hub", required=True, help="Hub base URL")
+    en.add_argument("--token", required=True, help="One-time enroll token")
+    en.add_argument("--tags", default=None, help="Comma-separated machine tags")
+    en.add_argument(
+        "--config",
+        default=None,
+        help="Config file to write (default: ~/.coreme/agent.toml)",
+    )
+
+    rn = commands.add_parser("run", help="Run the resident daemon (heartbeat + claim)")
+    _add_run_flags(rn)
+    rn.add_argument("--config", default=None, help="Agent config TOML path")
+    rn.add_argument("--poll-interval", type=float, default=None, metavar="SEC")
+    rn.add_argument("--heartbeat-interval", type=float, default=None, metavar="SEC")
+    rn.add_argument("--slots", type=int, default=None, help="Parallel assignment slots")
+
+    ins = commands.add_parser(
+        "install-service",
+        help="Print OS service registration for the daemon (print-only)",
+    )
+    ins.add_argument("--workspace", default=".", help="Workspace for the service")
+
     return parser
 
 
@@ -151,7 +198,13 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_list(args)
         if args.command == "show":
             return _cmd_show(args)
-    except (QueueError, HubClientError) as exc:
+        if args.command == "enroll":
+            return _cmd_enroll(args)
+        if args.command == "run":
+            return _cmd_run(args)
+        if args.command == "install-service":
+            return _cmd_install_service(args)
+    except (QueueError, HubClientError, ConfigError, DaemonLocked) as exc:
         print(f"error={exc}", file=sys.stderr)
         return 2
     parser.error(f"unknown command {args.command!r}")
@@ -295,6 +348,116 @@ def _cmd_show(args: argparse.Namespace) -> int:
             f"attempt_id={t.id} attempt_status={t.status}"
             + (f" exit_code={t.exit_code}" if t.exit_code is not None else "")
         )
+    return 0
+
+
+def _cmd_enroll(args: argparse.Namespace) -> int:
+    tags = split_csv(args.tags)
+    result = enroll_machine(
+        args.hub,
+        args.token,
+        tags=tags,
+        agent_version=__version__,
+    )
+    config = AgentConfig(
+        hub_url=args.hub,
+        machine_id=result.machine_id,
+        machine_token=result.machine_token,
+        tags=tuple(result.tags) or tuple(tags),
+    )
+    path = save_config(config, args.config or default_config_path())
+    print("status=enrolled")
+    print(f"machine_id={result.machine_id}")
+    print(f"config={path}")
+    print("next=coreme-agent run")
+    return 0
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    config = load_config(
+        path=args.config,
+        env=os.environ,
+        hub_url=args.hub,
+        machine_id=args.machine_id,
+        machine_token=args.machine_token,
+        tags=list(args.tag) if args.tag else None,
+        workspace=args.workspace,
+        poll_interval_sec=args.poll_interval,
+        heartbeat_interval_sec=args.heartbeat_interval,
+        slots=args.slots,
+    )
+    if not config.hub_url or not config.machine_id or not config.machine_token:
+        raise ConfigError(
+            "daemon needs hub credentials; run 'coreme-agent enroll' first "
+            "(or pass --hub/--machine-id/--machine-token)"
+        )
+    setup_logging(config)
+    client = HubClient(config.hub_url, config.machine_token, config.machine_id)
+    workspace = Path(config.workspace).resolve()
+    lock = acquire_lock(workspace)
+    stop = threading.Event()
+
+    def _handle(signum: int, frame: object) -> None:
+        if stop.is_set():
+            os._exit(130)
+        log.info("signal %s: finishing current work", signum)
+        stop.set()
+
+    signal.signal(signal.SIGINT, _handle)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _handle)
+
+    coreme_cmd = _coreme_cmd(args)
+    timeout_sec = args.timeout_sec
+    daemon = Daemon(
+        client,
+        config,
+        runner=lambda c, w: execute_claimed(
+            c,
+            w,
+            workspace=workspace,
+            coreme_cmd=coreme_cmd,
+            timeout_sec=timeout_sec,
+        ),
+    )
+    print(f"status=running workspace={workspace} slots={config.slots}")
+    try:
+        return daemon.run(stop)
+    except KeyboardInterrupt:
+        os._exit(130)
+    finally:
+        release_lock(lock)
+
+
+def _cmd_install_service(args: argparse.Namespace) -> int:
+    exe = shutil.which("coreme-agent") or "coreme-agent"
+    workspace = str(Path(args.workspace).resolve())
+    if os.name == "nt":
+        print("# Register an at-logon task (run in an elevated prompt):")
+        print(
+            f'schtasks /Create /TN "CoreMeAgent" /SC ONLOGON /RL HIGHEST /F '
+            f'/TR ""{exe}" run --workspace "{workspace}""'
+        )
+        print("# Start it now:")
+        print('schtasks /Run /TN "CoreMeAgent"')
+        print("# Note: ONLOGON tasks do not restart on crash. For watchdog behavior prefer NSSM:")
+        print(f'#   nssm install CoreMeAgent "{exe}" run --workspace "{workspace}"')
+        return 0
+    print("# systemd unit — save as /etc/systemd/system/coreme-agent.service:")
+    print("[Unit]")
+    print("Description=CoreMe robot daemon")
+    print("After=network-online.target")
+    print("Wants=network-online.target")
+    print()
+    print("[Service]")
+    print(f"ExecStart={exe} run --workspace {workspace}")
+    print("Restart=on-failure")
+    print("RestartSec=5")
+    print()
+    print("[Install]")
+    print("WantedBy=multi-user.target")
+    print()
+    print("# systemctl daemon-reload && systemctl enable --now coreme-agent")
     return 0
 
 

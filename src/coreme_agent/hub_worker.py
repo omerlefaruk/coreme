@@ -11,7 +11,7 @@ from coreme.release import zip_tree
 from coreme_agent import __version__
 from coreme_agent.cache import ReleasePullError, resolve_release
 from coreme_agent.executor import ExecResult, execute_assignment
-from coreme_agent.hub import CompletePayload, HubClient
+from coreme_agent.hub import ClaimedWork, CompletePayload, HubClient
 from coreme_agent.outbox import flush_item, flush_outbox, write_outbox
 from coreme_agent.run import RunOutcome, RunRequest
 from coreme_agent.store import STATUS_FAILED
@@ -42,6 +42,34 @@ def process_one(
         agent_version=__version__,
         running_assignment_id=claimed.id,
     )
+    try:
+        return execute_claimed(
+            client,
+            claimed,
+            workspace=root,
+            coreme_cmd=coreme_cmd,
+            timeout_sec=timeout_sec,
+            cache_dir=cache,
+            outbox_dir=outbox,
+        )
+    finally:
+        client.heartbeat(tags=tags, status="idle", agent_version=__version__)
+
+
+def execute_claimed(
+    client: HubClient,
+    claimed: ClaimedWork,
+    *,
+    workspace: str | Path | None = None,
+    coreme_cmd: list[str] | None = None,
+    timeout_sec: float | None = None,
+    cache_dir: str | Path | None = None,
+    outbox_dir: str | Path | None = None,
+) -> RunOutcome:
+    """Run one already-claimed Assignment: renew lease, pull, execute, outbox."""
+    root = Path(workspace).resolve() if workspace else Path.cwd()
+    cache = Path(cache_dir) if cache_dir else root / ".coreme-agent" / "cache"
+    outbox = Path(outbox_dir) if outbox_dir else root / ".coreme-agent" / "outbox"
     stop = threading.Event()
     interval = max(1.0, claimed.lease_seconds / 3)
     renewer = threading.Thread(
@@ -95,7 +123,6 @@ def process_one(
     finally:
         stop.set()
         renewer.join(timeout=2)
-        client.heartbeat(tags=tags, status="idle", agent_version=__version__)
     return RunOutcome(
         id=claimed.id,
         status=result.status,
