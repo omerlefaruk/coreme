@@ -1,0 +1,49 @@
+name = "daily-summary"
+version = "0.2.0"
+entry = "main.py"
+
+[proof]
+offline = "pytest -q"
+
+[runtime]
+timeout_sec = 2400
+
+[secrets]
+names = ["OPERA_USER", "OPERA_PASSWORD"]
+
+[inputs.mode]
+type = "string"
+default = "offline"
+
+[inputs.input_dir]
+type = "string"
+default = ""
+
+[inputs.today]
+type = "string"
+default = ""
+
+[inputs.reports]
+type = "string"
+default = "manager"
+
+[inputs.workers]
+type = "string"
+default = "2"
+
+[inputs.headless]
+# Prefer 1 for speed/stability; headed (0) can flake if many Chrome windows are open
+type = "string"
+default = "1"
+
+[inputs.only]
+type = "string"
+default = ""
+
+[inputs.skip]
+type = "string"
+default = ""
+
+[inputs.seed]
+type = "file"
+required = false

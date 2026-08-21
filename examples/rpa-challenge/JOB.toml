@@ -1,0 +1,25 @@
+name = "rpa-challenge"
+version = "0.1.0"
+entry = "main.py"
+
+[proof]
+offline = "pytest -q"
+
+[runtime]
+timeout_sec = 300
+
+[inputs.mode]
+type = "string"
+default = "offline"
+
+[inputs.headless]
+type = "string"
+default = "1"
+
+[inputs.max_rows]
+type = "string"
+default = "10"
+
+[inputs.data_file]
+type = "file"
+required = false

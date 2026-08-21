@@ -1,0 +1,12 @@
+name = "secret-echo"
+version = "0.1.0"
+entry = "main.py"
+
+[proof]
+offline = "pytest -q"
+
+[runtime]
+timeout_sec = 60
+
+[secrets]
+names = ["DEMO_TOKEN"]

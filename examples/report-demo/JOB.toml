@@ -1,0 +1,13 @@
+name = "report-demo"
+version = "0.1.0"
+entry = "main.py"
+
+[proof]
+offline = "pytest -q"
+
+[runtime]
+timeout_sec = 60
+
+[inputs.mode]
+type = "string"
+default = "work"

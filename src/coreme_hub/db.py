@@ -171,6 +171,9 @@ def connect(dsn: str, schema: str = "public") -> Connection[dict[str, Any]]:
         ident = sql.Identifier(schema)
         conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(ident))
         conn.execute(sql.SQL("SET search_path TO {}").format(ident))
+        # SET lives inside the open transaction; Pool._checkin rolls back
+        # checked-in connections, which would silently revert search_path.
+        conn.commit()
     return conn
 
 

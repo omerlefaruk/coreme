@@ -21,7 +21,7 @@ from helpers import make_repo, write_job
 from coreme_agent.cli import main as agent_main
 from coreme_agent.hub import HubClient, HubClientError, enroll_machine
 from coreme_hub.blobs import hash_hex
-from coreme_hub.db import StoreError, connect, hash_token, migrate
+from coreme_hub.db import Pool, StoreError, connect, hash_token, migrate
 from coreme_hub.http import parse_bind, serve
 from coreme_hub.store import (
     STATUS_CLAIMED,
@@ -104,6 +104,19 @@ def schema(pg_dsn: str) -> str:
     name = f"t_{uuid.uuid4().hex[:12]}"
     migrate(pg_dsn, schema=name)
     return name
+
+
+def test_pool_reuse_keeps_search_path(pg_dsn: str, schema: str) -> None:
+    """A rolled-back idle connection must not fall back to public."""
+    pool = Pool(pg_dsn, schema=schema, max_size=2)
+    try:
+        with pool.connection():
+            pass  # checkin rolls this connection back
+        with pool.connection() as conn:
+            row = conn.execute("SHOW search_path").fetchone()
+            assert row is not None and schema in str(row["search_path"])
+    finally:
+        pool.close()
 
 
 def _register(conn: object, machine_id: str, token: str, tags: list[str]) -> None:

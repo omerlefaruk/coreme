@@ -1,8 +1,6 @@
 runs/
 releases/
 .coreme-seed/
-# Job examples stay local.
-examples/
 __pycache__/
 .venv/
 *.egg-info/

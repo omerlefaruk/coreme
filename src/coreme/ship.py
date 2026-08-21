@@ -63,10 +63,11 @@ def ship_job(job_path: str | Path, repo_root: Path) -> tuple[Path, str]:
 
     releases = _ensure_releases_dir(Path(repo_root) / "releases")
     destination = releases / f"{manifest.name}-{manifest.version}"
+    if os.path.lexists(destination):
+        # Includes dangling symlinks: refuse before resolve() follows them.
+        raise ShipError(f"Release already exists: {destination}")
     if destination.resolve().parent != releases.resolve():
         raise ShipError(f"Release destination escapes releases/: {destination}")
-    if os.path.lexists(destination):
-        raise ShipError(f"Release already exists: {destination}")
 
     temp_dir: Path | None = None
     try:
