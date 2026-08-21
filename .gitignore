@@ -19,3 +19,6 @@ coreme-hub-data/
 .tmp-pg/
 
 deploy/.env
+
+# Local daemon log sink (background process holds this handle)
+/None
