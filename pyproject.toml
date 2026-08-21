@@ -88,6 +88,12 @@ warn_unused_configs = true
 module = ["coreme._process"]
 disable_error_code = ["attr-defined"]
 
+# Win32 JobObject plumbing only exists in ctypes stubs on Windows; Linux CI
+# still needs to typecheck the rest of the module.
+[[tool.mypy.overrides]]
+module = ["coreme_agent.executor"]
+disable_error_code = ["attr-defined"]
+
 [[tool.mypy.overrides]]
 module = ["testcontainers", "testcontainers.*"]
 ignore_missing_imports = true

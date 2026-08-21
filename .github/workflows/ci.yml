@@ -54,4 +54,7 @@ jobs:
           # PyPI as declared dependencies, coreme itself from dist/ only.
           pip install --find-links dist "coreme[hub]"
           pip show coreme
-      - run: bash scripts/smoke.sh
+      - name: Smoke the installed wheel (activation does not persist across steps)
+        run: |
+          . .smoke-venv/bin/activate
+          bash scripts/smoke.sh
