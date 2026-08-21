@@ -354,6 +354,8 @@ def _take_machine_result_channel() -> int | None:
         return None
     try:
         if locator.startswith("handle:"):
+            if sys.platform != "win32":
+                raise ProcessError("handle: result channel requires Windows")
             import msvcrt
 
             inherited = msvcrt.open_osfhandle(int(locator[7:]), os.O_WRONLY)

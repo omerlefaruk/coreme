@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -201,7 +202,7 @@ def _read_pid(path: Path) -> int | None:
 
 
 def _pid_alive(pid: int) -> bool:
-    if os.name == "nt":
+    if sys.platform == "win32":
         SYNCHRONIZE = 0x00100000
         handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
         if not handle:

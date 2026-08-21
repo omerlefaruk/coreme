@@ -246,7 +246,7 @@ def _pipe_read_ready(fd: int, stop: threading.Event) -> bool:
     bounded stop without closing a descriptor that the reader could later
     mistake for a newly reused descriptor.
     """
-    if os.name != "nt":
+    if sys.platform != "win32":
         readable, _, _ = select.select([fd], [], [], 0.05)
         return bool(readable)
 
@@ -296,7 +296,7 @@ def _run_coreme(
     startupinfo = None
     job = None
     popen_extra: dict[str, Any] = {}
-    if os.name == "nt":
+    if sys.platform == "win32":
         import msvcrt
 
         from coreme._process import _CREATE_SUSPENDED, _WindowsJob
