@@ -51,3 +51,8 @@ coreme run report                       # ops re-run by name (latest release)
   (see [repair.md](repair.md)).
 - Multi-step Jobs use job-owned phases ([phases.md](phases.md)); no DAG.
 - Ship before fleet use; dirty release trees refuse to run.
+
+## Next: run it on the fleet
+
+Once shipped, hand off to [../fleet/SKILL.md](../fleet/SKILL.md): register
+into the hub catalog, enqueue (or schedule), watch the run, read evidence.

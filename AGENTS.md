@@ -26,6 +26,7 @@
 ## Pointers
 
 - **Job** author / change / prove / ship → [skills/build-job/SKILL.md](skills/build-job/SKILL.md)
+- **Fleet** register / enroll / enqueue / schedules / evidence → [skills/fleet/SKILL.md](skills/fleet/SKILL.md)
 - **Kernel implement** CLI / runner / ship / resolve / events / repair coordinator / `coreme_agent` → [skills/devex/implement-kernel.md](skills/devex/implement-kernel.md)
 - **Repair** failed Run / brief / auto-repair → [skills/build-job/repair.md](skills/build-job/repair.md)
 - **Phases** / seed-from-fail → [skills/build-job/phases.md](skills/build-job/phases.md)
