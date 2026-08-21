@@ -75,6 +75,7 @@ change that adds, renames, or moves any of them.
 | Task | Entry |
 |---|---|
 | Author / change a Job | [skills/build-job/SKILL.md](skills/build-job/SKILL.md) |
+| Same docs on a pipx-only machine | `coreme skills list` / `show` / `install <dir>` (bundled in the wheel) |
 | Repair a failed Run | [skills/build-job/repair.md](skills/build-job/repair.md) |
 | Fleet operations | [skills/fleet/SKILL.md](skills/fleet/SKILL.md) + docs/days/FLEET.md |
 | Kernel changes | [skills/devex/implement-kernel.md](skills/devex/implement-kernel.md) |
@@ -82,6 +83,10 @@ change that adds, renames, or moves any of them.
 | Check a fresh machine | `coreme doctor [--hub URL]` |
 | Join a worker PC to the fleet | `coreme-agent enroll --hub URL --token ...` then `coreme-agent run` |
 | Ship / freeze | `coreme ship <path>` |
+
+Bundled copies of AGENTS.md + skills/ live at `src/coreme/agentdocs/`
+(regenerate with `python scripts/sync_agentdocs.py`; repo files are the
+source of truth).
 | Deploy hub | docs/deploy.md (docker-compose + Caddy TLS) |
 | Output contracts for agents | docs/schemas.md |
 | Roadmap / milestones | docs/PLAN.md |

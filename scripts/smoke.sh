@@ -27,6 +27,13 @@ case "$coreme_file" in
 *) fail "coreme resolved outside site-packages: $coreme_file" ;;
 esac
 
+# Bundled agent docs must travel inside the wheel: a pipx-only machine still
+# gets AGENTS.md + skills via `coreme skills`.
+run coreme skills
+coreme skills | grep -q "skills/fleet/SKILL.md" ||
+  fail "bundled docs missing the fleet skill"
+run coreme skills show AGENTS >/dev/null
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 cd "$work"

@@ -6,6 +6,19 @@ versioning follows [SemVer](https://semver.org/) while pre-1.0.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-21
+
+### Added
+
+- `coreme skills` command family: `list` / `show <slug>` / `install <dir>`.
+- Bundled agent docs: the wheel now ships synced copies of `AGENTS.md` and
+  `skills/**` inside `coreme/agentdocs/`, so a pipx-installed coreme can
+  bootstrap any coding agent on a machine with no repo checkout
+  (`coreme skills install .` then follow the docs).
+- `scripts/sync_agentdocs.py` (+ `--check` in verify.ps1 and CI) keeps the
+  bundled copies identical to the repo sources; smoke test asserts the
+  wheel carries the docs.
+
 ## [0.5.1] - 2026-08-21
 
 ### Added

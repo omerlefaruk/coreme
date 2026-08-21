@@ -9,6 +9,7 @@ from pathlib import Path
 
 from coreme import __version__
 from coreme._process import ProcessError
+from coreme.agentdocs import AgentDocsError, install_docs, list_docs, read_doc
 from coreme.brief import BriefError, assemble_brief
 from coreme.doctor import render_json, render_plain, run_doctor
 from coreme.events import events_path, read_events, read_fail_summary
@@ -240,6 +241,17 @@ def build_parser() -> argparse.ArgumentParser:
         dest="as_json",
         help="Machine-readable JSON output",
     )
+
+    skills_parser = commands.add_parser(
+        "skills",
+        help="Bundled agent docs (AGENTS.md + skills) shipped inside this package",
+    )
+    skills_sub = skills_parser.add_subparsers(dest="skills_command")
+    skills_sub.add_parser("list", help="List bundled doc names")
+    skills_show = skills_sub.add_parser("show", help="Print one bundled doc")
+    skills_show.add_argument("slug", help="Doc name from `coreme skills list`")
+    skills_install = skills_sub.add_parser("install", help="Copy all bundled docs into a directory")
+    skills_install.add_argument("target", help="Target directory (created if missing)")
     return parser
 
 
@@ -273,6 +285,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_seed_from_fail(args, plain_flag=plain)
         if args.command == "doctor":
             return _cmd_doctor(args)
+        if args.command == "skills":
+            return _cmd_skills(args)
     except (
         ManifestError,
         InputError,
@@ -284,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         BriefError,
         RepairError,
         SeedFromFailError,
+        AgentDocsError,
     ) as error:
         print_error(str(error), plain_flag=plain)
         return 2
@@ -471,3 +486,25 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print(render_plain(checks))
     ok = all(check.status != "fail" for check in checks)
     return 0 if ok else 1
+
+
+def _cmd_skills(args: argparse.Namespace) -> int:
+    if args.skills_command == "show":
+        # Doc text is UTF-8 but a Windows console may be cp1252; write encoded
+        # bytes instead of trusting stdout's text encoding.
+        sys.stdout.flush()
+        data = read_doc(args.slug).encode("utf-8", errors="replace")
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+        return 0
+    if args.skills_command == "install":
+        target = Path(args.target)
+        written = install_docs(target)
+        print(f"wrote {len(written)} docs under {target.resolve()}")
+        return 0
+    for slug in list_docs():
+        print(slug)
+    print()
+    print("show one:  coreme skills show <name>")
+    print("copy all:  coreme skills install <dir>")
+    return 0

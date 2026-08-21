@@ -54,6 +54,9 @@ version = { attr = "coreme.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+coreme = ["agentdocs/*.md", "agentdocs/skills/*/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
