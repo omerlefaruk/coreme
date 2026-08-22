@@ -26,6 +26,7 @@
 ## Pointers
 
 - **Job** author / change / prove / ship → [skills/build-job/SKILL.md](skills/build-job/SKILL.md)
+- **Onboard** empty client PC / workspace setup → [scripts/bootstrap-coreme.ps1](scripts/bootstrap-coreme.ps1) + [START-HERE.md](START-HERE.md)
 - **Fleet** register / enroll / enqueue / schedules / evidence → [skills/fleet/SKILL.md](skills/fleet/SKILL.md)
 - **Kernel implement** CLI / runner / ship / resolve / events / repair coordinator / `coreme_agent` → [skills/devex/implement-kernel.md](skills/devex/implement-kernel.md)
 - **Repair** failed Run / brief / auto-repair → [skills/build-job/repair.md](skills/build-job/repair.md)

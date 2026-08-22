@@ -100,7 +100,38 @@ def _check_workspace(root: Path) -> list[Check]:
         WARN if free is not None and free < 1.0 else PASS,
         f"{free:.1f} GiB free" if free is not None else "unknown",
     )
-    return [yield_check, layout, disk]
+    return [
+        yield_check,
+        layout,
+        disk,
+        *_check_agent_docs(resolved),
+        _check_git_repo(resolved),
+    ]
+
+
+def _check_agent_docs(root: Path) -> list[Check]:
+    """Agent-facing docs installed into this workspace? Warn, never fail."""
+    checks = []
+    for name in ("AGENTS.md", "START-HERE.md"):
+        if (root / name).is_file():
+            checks.append(Check(name.lower().replace(".md", ""), PASS, "installed"))
+        else:
+            checks.append(
+                Check(
+                    name.lower().replace(".md", ""),
+                    WARN,
+                    f"missing; run: coreme skills install {root}",
+                )
+            )
+    return checks
+
+
+def _check_git_repo(root: Path) -> Check:
+    if (root / ".git").exists():
+        return Check("git", PASS, "repository initialized")
+    if shutil.which("git") is None:
+        return Check("git", WARN, "git not on PATH; ship commits unavailable")
+    return Check("git", WARN, "not a repository yet; run: git init")
 
 
 def _check_hub(hub_url: str) -> Check:

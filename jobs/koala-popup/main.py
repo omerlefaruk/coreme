@@ -38,9 +38,23 @@ def spawn_messagebox(message: str, title: str = "koala") -> None:
         flags |= 0x00000008  # DETACHED_PROCESS
         flags |= 0x00000200  # CREATE_NEW_PROCESS_GROUP
         flags |= 0x08000000  # CREATE_NO_WINDOW
-        subprocess.Popen(cmd, creationflags=flags, close_fds=False)
+        flags |= 0x01000000  # CREATE_BREAKAWAY_FROM_JOB (escape Job, avoid 60s timeout)
+        subprocess.Popen(
+            cmd,
+            creationflags=flags,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
     else:
-        subprocess.Popen(cmd, close_fds=False)
+        subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
 
 
 def main() -> None:

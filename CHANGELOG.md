@@ -6,6 +6,31 @@ versioning follows [SemVer](https://semver.org/) while pre-1.0.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-22
+
+### Added
+
+- `START-HERE.md`: the one-file agent contract (TR quick block + EN) —
+  kickoff prompt, rules digest, six-point Job bar, git discipline,
+  local-vs-fleet recipe, definition of done. Bundled in the wheel; lands at
+  workspace root via `coreme skills install`.
+- `scripts/bootstrap-coreme.ps1`: fresh-PC bootstrap with a check-first
+  chain (uv → pipx+Python → install uv), GitHub-release wheel install
+  (`-CoreMeVersion` pin, `-WheelPath` dev override), skills install, and a
+  `coreme doctor` gate.
+- `coreme doctor` workspace checks: `agents`, `start-here`, `git`
+  (warn-level, never fail a fresh folder).
+- Ship-review bar (six points) + git/secrets discipline documented in the
+  build-job skill.
+
+### Fixed
+
+- Pool reused connections lost `search_path` after rollback (`/metrics` 500).
+- Dangling release destination symlinks now refused as "already exists"
+  before `resolve()` follows them (Linux ship behavior).
+- Win32 code paths gated behind `sys.platform`; Linux CI typechecks strict.
+- CI smoke keeps its venv activation across steps; examples/ now tracked.
+
 ## [0.6.0] - 2026-08-21
 
 ### Added

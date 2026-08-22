@@ -1,4 +1,4 @@
-"""Sync agent-facing docs (AGENTS.md, skills/) into src/coreme/agentdocs/.
+"""Sync agent-facing docs (AGENTS.md, START-HERE.md, skills/) into src/coreme/agentdocs/.
 
 The wheel bundles these copies so any pipx-installed coreme carries its own
 agent instructions (`coreme skills`). Repo files stay the source of truth;
@@ -16,11 +16,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEST = REPO_ROOT / "src" / "coreme" / "agentdocs"
 
+ROOT_DOCS = ("AGENTS.md", "START-HERE.md")
+
 
 def _doc_files() -> list[Path]:
-    files = [REPO_ROOT / "AGENTS.md"]
-    skills = REPO_ROOT / "skills"
-    files.extend(sorted(p for p in skills.rglob("*.md") if p.is_file()))
+    files = [REPO_ROOT / name for name in ROOT_DOCS]
+    files.extend(sorted((REPO_ROOT / "skills").rglob("*.md")))
     return [p for p in files if p.is_file()]
 
 

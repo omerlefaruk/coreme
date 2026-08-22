@@ -6,6 +6,7 @@ from coreme import agentdocs
 def test_bundled_docs_exist() -> None:
     docs = agentdocs.list_docs()
     assert "AGENTS.md" in docs
+    assert "START-HERE.md" in docs
     assert "skills/build-job/SKILL.md" in docs
     assert "skills/fleet/SKILL.md" in docs
     assert all(path.is_file() for path in docs.values())

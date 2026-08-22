@@ -4,7 +4,7 @@
 
 **Repo:** `<path-to-coreme>`
 **Last updated:** 2026-08-21
-**Current focus:** executing [docs/PLAN.md](docs/PLAN.md) milestone **M1** (installable distribution); fleet **F2/F3 implemented in code** per the PLAN mapping ([docs/days/FLEET.md](docs/days/FLEET.md)). Days 1–7 stay the local Job product. Full Doctor / multi-tenant / chatbots / platform UI stay deferred.
+**Current focus:** executing [docs/PLAN.md](docs/PLAN.md) milestone **M1** (installable distribution); fleet **F2/F3 implemented in code** per the PLAN mapping ([docs/days/FLEET.md](docs/days/FLEET.md)). Days 1–7 stay the local Job product. **Control Room web UI + platform UI now in scope** (was deferred); Full Doctor / multi-tenant / chatbots stay deferred.
 
 **Review goal (2026-08-07):** Day 6 + post–Day 5 ops polish + `fail.json` polish on local `master` is **REVIEW CLEAN / MERGED**. Non-blocking follow-up: `coreme --plain` should export `COREME_PLAIN=1` into the Job env so optional Job Rich paint also stays plain.
 
@@ -70,7 +70,7 @@ Ask: does this help **produce**, **prove**, **freeze**, or **re-run** a Job?
 | **Secret name** | *(Day 4)* Env var name declared on the Job; value never in evidence |
 | **Phase** | *(Day 5)* Named sequential step inside one Job; selectable via `only` / `skip` |
 
-Avoid early: platform, factory, orchestrator, control plane, delivery packet, canvas, Doctor, Control Room, phase **DAG**. Those words recreate older overscoped experiments (`roi-h`, `nga`).
+Avoid early: platform, factory, orchestrator, control plane, delivery packet, canvas, Doctor, phase **DAG**. Those words recreate older overscoped experiments (`roi-h`, `nga`). Control Room is now *in scope*.
 
 ---
 
@@ -97,7 +97,7 @@ Milestones **0–3 are the real product.** Day 4–5 finish the everyday author/
 
 **Active (post–Day 7):** [docs/days/FLEET.md](docs/days/FLEET.md) — multi-machine agent + thin hub ladder (**F0–F7**). Sibling packages `coreme_agent` / later `coreme_hub`; **not** inside the kernel. Chatbots deferred.
 
-**Still deferred:** browser profile, multi-job workspace product, platform UI, full Doctor (draft/activate/reviews/SQLite) → [docs/LATER.md](docs/LATER.md).
+**Still deferred:** browser profile, multi-job workspace product, full Doctor (draft/activate/reviews/SQLite) → [docs/LATER.md](docs/LATER.md). **No longer deferred:** platform UI / Control Room web UI.
 
 **Critical:** implement only the fleet **stage** named in Current focus. F2 is the thin hub; do not jump to later Grafana/schedule stages “while here.” Older projects failed by starting at platform.
 
@@ -208,7 +208,6 @@ Do **not** build these into the kernel early:
 - Code signing / GPG / full release registry product (fleet uses hub catalog + hash verify per [FLEET.md](docs/days/FLEET.md) — not in kernel)
 - Dev vs prod channels as a product surface
 - Browser/Playwright **inside the kernel** (Jobs may add deps; see skill — not LATER “browser profile” unless a day plan says so)
-- Control Room / web UI / dashboard (Grafana is OSS compose, not coreme UI)
 - Kernel SQLite event store / ActiveGraph (agent local queue SQLite is fleet package only)
 - Agent operation catalog / JSON-RPC
 - Phase **DAG** / parallel scheduler (Day 5 = sequential `only`/`skip` only; fleet fan-out = many Assignments)

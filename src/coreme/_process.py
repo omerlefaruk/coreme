@@ -16,6 +16,7 @@ from typing import TextIO
 _CREATE_SUSPENDED = 0x00000004
 _EXTENDED_LIMIT_INFORMATION = 9
 _KILL_ON_JOB_CLOSE = 0x00002000
+_BREAKAWAY_OK = 0x00000800
 _SNAP_THREAD = 0x00000004
 _THREAD_SUSPEND_RESUME = 0x0002
 _INVALID_DWORD = 0xFFFFFFFF
@@ -132,7 +133,7 @@ class _WindowsJob:
         if not self._handle:
             raise ProcessError("Cannot create Windows Job Object")
         info = _ExtendedLimitInformation()
-        info.basic_limit_information.limit_flags = _KILL_ON_JOB_CLOSE
+        info.basic_limit_information.limit_flags = _KILL_ON_JOB_CLOSE | _BREAKAWAY_OK
         if not self._kernel32.SetInformationJobObject(
             self._handle,
             _EXTENDED_LIMIT_INFORMATION,

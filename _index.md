@@ -76,6 +76,7 @@ change that adds, renames, or moves any of them.
 |---|---|
 | Author / change a Job | [skills/build-job/SKILL.md](skills/build-job/SKILL.md) |
 | Same docs on a pipx-only machine | `coreme skills list` / `show` / `install <dir>` (bundled in the wheel) |
+| Fresh client PC → workspace | `scripts/bootstrap-coreme.ps1` (uv/pipx chain) then follow [START-HERE.md](START-HERE.md) |
 | Repair a failed Run | [skills/build-job/repair.md](skills/build-job/repair.md) |
 | Fleet operations | [skills/fleet/SKILL.md](skills/fleet/SKILL.md) + docs/days/FLEET.md |
 | Kernel changes | [skills/devex/implement-kernel.md](skills/devex/implement-kernel.md) |

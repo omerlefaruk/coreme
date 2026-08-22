@@ -52,6 +52,21 @@ coreme run report                       # ops re-run by name (latest release)
 - Multi-step Jobs use job-owned phases ([phases.md](phases.md)); no DAG.
 - Ship before fleet use; dirty release trees refuse to run.
 
+## Ship review bar (all six, every Job)
+
+1. `JOB.md` contract spine written before code (goal, inputs, secret names, steps).
+2. Every step emits `say_step` events; plain `log.txt` stays readable.
+3. Offline proof with fixtures, zero network, green via `coreme test`.
+4. Steps >= 3 use the phases pattern (`only`/`skip`).
+5. Outputs go to `$COREME_ARTIFACTS_DIR`; never litter the cwd.
+6. Honest failure: nonzero exit + `fail.json`; never masked.
+
+Git discipline: `git init` if needed at kickoff; commit after every successful
+ship as `ship <name>-<version>`; never commit mid-refactor. Secret values live
+only in environment variables set with the operator's explicit approval —
+names only in the repo and evidence. On a fresh client machine start from
+[../../START-HERE.md](../../START-HERE.md).
+
 ## Next: run it on the fleet
 
 Once shipped, hand off to [../fleet/SKILL.md](../fleet/SKILL.md): register

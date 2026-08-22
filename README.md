@@ -4,8 +4,7 @@ CoreMe is an open-source, AI-friendly automation kernel. A coding agent authors
 Jobs guided by CoreMe skills, then proves, freezes, and ships them; a robot
 daemon on every worker PC pulls work from the hub, executes Jobs, and uploads
 evidence; the hub orchestrates from the cloud — release catalog, dispatch,
-schedules, evidence storage. There is no web UI and no visual canvas by
-design: skills plus the kernel are the interface. The runtime wall stands:
+schedules, evidence storage. A Control Room web UI is now in scope alongside the CLI. The runtime wall stands:
 Jobs never call an LLM.
 
 A Job is a folder with a strict `JOB.toml` manifest, an entry script, and
@@ -95,7 +94,7 @@ evidence.
 
 ## AI-native by design
 
-There is no UI. Coding agents are the interface:
+Agents and the Control Room UI are the interface:
 
 - **Skills** teach agents the flows: [skills/build-job/](skills/build-job/)
   (author, repair, phases), [skills/fleet/](skills/fleet/) (ship and

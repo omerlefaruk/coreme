@@ -259,7 +259,7 @@ def default_spawn(
 
     path = Path(log_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"repair: Codex session → {path}", flush=True)
+    print(f"repair: Codex session -> {path}", flush=True)
     with path.open("w", encoding="utf-8", errors="replace") as log_fh:
         # Banner for audit.
         log_fh.write("# coreme codex repair log\n")
