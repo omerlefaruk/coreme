@@ -33,7 +33,10 @@ A Job is done only when **all six** hold:
 
 ## 3. Working rules
 
-- **Git:** if `.git` is missing run `git init`. Commit after **every successful ship**: `ship <name>-<version>`. Never commit mid-refactor.
+- **Git:** if `.git` is missing run `git init`. If identity is unset, set a
+  repo-local one (`git config user.name ...` / `user.email ...` — ask the
+  operator for preferred values). Commit after **every successful ship**:
+  `ship <name>-<version>`. Never commit mid-refactor.
 - **Secrets:** declare **names** in `JOB.toml`. Values live only in environment variables (`setx NAME value` once, or session `$env:`), set only with the operator's explicit go-ahead. Never write values into files, logs, or evidence.
 - **Ship:** `coreme ship ./jobs/<name>` freezes an immutable hashed release. Dirty releases refuse to run — that's the point.
 - **Failures:** diagnose in order: `fail.json` → `log.txt` → `events.jsonl`. Fix source, re-prove, re-ship as a new version. Never edit anything under `releases/`.
