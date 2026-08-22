@@ -20,3 +20,9 @@ deploy/.env
 
 # Local daemon log sink (background process holds this handle)
 /None
+
+# Local scratch (fleet setup + agent state)
+.tmp-pg-hub/
+/coreme-agent.db
+/del.sql
+/setup_hub_once.py

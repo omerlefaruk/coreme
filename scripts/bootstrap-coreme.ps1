@@ -116,7 +116,7 @@ if ($LASTEXITCODE -ne 0) { throw "doctor reported failures ($LASTEXITCODE)" }
 
 # --- 5. hand off to the agent ------------------------------------------------
 Write-Host ""
-Write-Host "[bootstrap] OK — coreme $CoreMeVersion ready ($engine)"
+Write-Host "[bootstrap] OK — $(& $coreme --version) ready ($engine)"
 Write-Host "[bootstrap] AGENT NEXT STEPS:"
 Write-Host "[bootstrap]   1. Read AGENTS.md and START-HERE.md in this folder."
 Write-Host "[bootstrap]   2. If .git is missing: git init."

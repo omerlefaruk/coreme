@@ -1,6 +1,0 @@
-2026-08-21 23:31:28.097 GMT [59080] LOG:  starting PostgreSQL 16.2 on x86_64-pc-mingw64, compiled by gcc.exe (x86_64-posix-seh-rev2, Built by MinGW-W64 project) 12.2.0, 64-bit
-2026-08-21 23:31:28.098 GMT [59080] LOG:  listening on IPv4 address "127.0.0.1", port 55802
-2026-08-21 23:31:28.136 GMT [16420] LOG:  database system was shut down at 2026-08-21 23:31:16 GMT
-2026-08-21 23:31:28.157 GMT [59080] LOG:  database system is ready to accept connections
-2026-08-21 23:36:28.133 GMT [74896] LOG:  checkpoint starting: time
-2026-08-21 23:36:42.368 GMT [74896] LOG:  checkpoint complete: wrote 132 buffers (0.8%); 0 WAL file(s) added, 0 removed, 0 recycled; write=14.098 s, sync=0.124 s, total=14.236 s; sync files=79, longest=0.004 s, average=0.002 s; distance=592 kB, estimate=592 kB; lsn=0/1516430, redo lsn=0/15163F8
